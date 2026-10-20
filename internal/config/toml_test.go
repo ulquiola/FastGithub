@@ -107,6 +107,41 @@ func TestParseRejectsBadTableHeader(t *testing.T) {
 	}
 }
 
+func TestParseRejectsBadHeaderChars(t *testing.T) {
+	bad := []string{
+		"[a]]\n",
+		"[domains.\"github.com\"]]\n",
+		"a] = 1\n",
+		"[a]b]\n",
+		"[a!b]\n",
+	}
+	for _, src := range bad {
+		_, err := Parse([]byte(src))
+		if err == nil || !strings.Contains(err.Error(), "键名包含非法字符") {
+			t.Fatalf("Parse(%q) err = %v，期望键名非法字符错误", src, err)
+		}
+	}
+	good := []string{
+		"[domains.\"a.b\"]\ntls_sni = false\n",
+		"[domains.\"a]b\"]\ntls_sni = false\n",
+		"[domains.\"a b\"]\ntls_sni = false\n",
+		"[a_b-c9]\nx = 1\n",
+		"[ a . b ]\nx = 1\n",
+	}
+	for _, src := range good {
+		if _, err := Parse([]byte(src)); err != nil {
+			t.Fatalf("Parse(%q) 不应报错: %v", src, err)
+		}
+	}
+}
+
+func TestParseBadKeyCharKeepsRune(t *testing.T) {
+	_, err := Parse([]byte("[dömains]\n"))
+	if err == nil || !strings.Contains(err.Error(), `"ö"`) {
+		t.Fatalf("err = %v，期望显示完整字符 ö", err)
+	}
+}
+
 func TestParseRejectsEmptyKeySegment(t *testing.T) {
 	for _, key := range []string{"", ".a", "..b", "a..b", "a. .b"} {
 		if parts, err := parseKeyPath(key); err == nil {

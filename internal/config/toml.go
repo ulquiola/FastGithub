@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Kind 表示 TOML 节点类型。
@@ -177,7 +178,13 @@ func parseKeyPath(key string) ([]string, error) {
 			for j < len(key) && key[j] != '.' && key[j] != ' ' && key[j] != '\t' {
 				j++
 			}
-			parts = append(parts, key[i:j])
+			seg := key[i:j]
+			for k := 0; k < len(seg); k++ {
+				if !isBareKeyChar(seg[k]) {
+					return nil, fmt.Errorf("键名包含非法字符 %q", badKeyChar(seg, k))
+				}
+			}
+			parts = append(parts, seg)
 			i = j
 		}
 		for i < len(key) && (key[i] == ' ' || key[i] == '\t') {
@@ -185,7 +192,7 @@ func parseKeyPath(key string) ([]string, error) {
 		}
 		if i < len(key) {
 			if key[i] != '.' {
-				return nil, fmt.Errorf("键名中出现非法字符 %q", string(key[i]))
+				return nil, fmt.Errorf("键名包含非法字符 %q", badKeyChar(key, i))
 			}
 			i++
 			if i >= len(key) {
@@ -202,6 +209,23 @@ func parseKeyPath(key string) ([]string, error) {
 		}
 	}
 	return parts, nil
+}
+
+// badKeyChar 解码 s[i] 处的完整字符，避免多字节字符被显示成单字节乱码。
+func badKeyChar(s string, i int) string {
+	r, _ := utf8.DecodeRuneInString(s[i:])
+	return string(r)
+}
+
+// isBareKeyChar 限定裸键字符集；带引号的键不受限制。
+func isBareKeyChar(c byte) bool {
+	switch {
+	case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		return true
+	case c == '_' || c == '-':
+		return true
+	}
+	return false
 }
 
 func parseValue(s string, line int) (*Node, error) {
