@@ -30,6 +30,12 @@ func localRequest(method, path string, body ...io.Reader) *http.Request {
 }
 
 func newTestUI(t *testing.T) (*Server, *certs.Authority, *int) {
+	installs := 0
+	s, ca := newTestUIFull(t, &installs, new(int))
+	return s, ca, &installs
+}
+
+func newTestUIFull(t *testing.T, installs, uninstalls *int) (*Server, *certs.Authority) {
 	t.Helper()
 	cfg := config.Default()
 	cfg.Domains = map[string]*config.Domain{"github.com": {}}
@@ -47,13 +53,13 @@ func newTestUI(t *testing.T) (*Server, *certs.Authority, *int) {
 	tracker.Tick()
 	ring := flow.NewRing(10)
 	ring.Add(flow.Entry{Time: time.Unix(1000, 0), Domain: "github.com", Method: "GET", Status: 200, Read: 1, Write: 2})
-	installs := 0
 	s := New(Options{
 		Config: cfg, Store: store, Tracker: tracker, Ring: ring, CA: ca,
 		Token: "testtoken", Version: "test",
-		InstallCert: func(string) error { installs++; return nil },
+		InstallCert:   func(string) error { *installs++; return nil },
+		UninstallCert: func(string) error { *uninstalls++; return nil },
 	})
-	return s, ca, &installs
+	return s, ca
 }
 
 func TestIndexInjectsToken(t *testing.T) {
@@ -277,5 +283,34 @@ func TestLoadOrCreateTokenRejectsInvalid(t *testing.T) {
 	}
 	if _, err := LoadOrCreateToken(path); err == nil {
 		t.Fatal("非法令牌应报错")
+	}
+}
+
+func TestUninstallCertRequiresToken(t *testing.T) {
+	var installs, uninstalls int
+	s, _ := newTestUIFull(t, &installs, &uninstalls)
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, localRequest(http.MethodPost, "/api/cert/uninstall"))
+	if rec.Code != http.StatusUnauthorized || uninstalls != 0 {
+		t.Fatalf("status=%d uninstalls=%d", rec.Code, uninstalls)
+	}
+
+	req := localRequest(http.MethodPost, "/api/cert/uninstall")
+	req.Header.Set("X-FastGithub-Token", "testtoken")
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || uninstalls != 1 {
+		t.Fatalf("status=%d uninstalls=%d body=%s", rec.Code, uninstalls, rec.Body.String())
+	}
+}
+
+func TestUninstallCertRejectsGet(t *testing.T) {
+	var installs, uninstalls int
+	s, _ := newTestUIFull(t, &installs, &uninstalls)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, localRequest(http.MethodGet, "/api/cert/uninstall"))
+	if rec.Code != http.StatusMethodNotAllowed || uninstalls != 0 {
+		t.Fatalf("status=%d uninstalls=%d", rec.Code, uninstalls)
 	}
 }

@@ -199,3 +199,46 @@ func TestLoadOrCreateRejectsMismatchedKey(t *testing.T) {
 		t.Fatal("证书与私钥不匹配时应报错")
 	}
 }
+
+func TestLoadMissing(t *testing.T) {
+	if _, err := Load(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("CA 不存在时应报错")
+	}
+}
+
+func TestCertPathWithoutKey(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cacert")
+	a, err := LoadOrCreate(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(a.KeyPath()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := CertPath(dir)
+	if err != nil || got != a.CertPath() {
+		t.Fatalf("CertPath = %q, %v", got, err)
+	}
+	if _, err := Load(dir); err == nil {
+		t.Fatal("缺少私钥时 Load 应报错")
+	}
+}
+
+func TestLoadOrCreateEmptyDirUsesDefault(t *testing.T) {
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(old)
+	a, err := LoadOrCreate("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(a.CertPath()) != DefaultDir {
+		t.Fatalf("CertPath = %s，期望在 %s 下", a.CertPath(), DefaultDir)
+	}
+}

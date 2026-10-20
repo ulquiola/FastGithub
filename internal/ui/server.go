@@ -22,14 +22,15 @@ var assets embed.FS
 
 // Options 是 UI 服务的依赖。
 type Options struct {
-	Config      *config.Config
-	Store       *config.Store
-	Tracker     *flow.Tracker
-	Ring        *flow.Ring
-	CA          *certs.Authority
-	Token       string
-	Version     string
-	InstallCert func(string) error
+	Config        *config.Config
+	Store         *config.Store
+	Tracker       *flow.Tracker
+	Ring          *flow.Ring
+	CA            *certs.Authority
+	Token         string
+	Version       string
+	InstallCert   func(string) error
+	UninstallCert func(string) error
 }
 
 // Server 提供内嵌页面、REST、SSE 与兼容端点。
@@ -42,6 +43,9 @@ func New(opts Options) *Server {
 	if opts.InstallCert == nil {
 		opts.InstallCert = certs.Install
 	}
+	if opts.UninstallCert == nil {
+		opts.UninstallCert = certs.Uninstall
+	}
 	s := &Server{opts: opts, mux: http.NewServeMux()}
 	s.mux.HandleFunc("/", s.index)
 	s.mux.HandleFunc("/app.js", staticAsset("assets/app.js", "application/javascript; charset=utf-8"))
@@ -51,6 +55,7 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("/api/logs", s.logs)
 	s.mux.HandleFunc("/api/cert", s.cert)
 	s.mux.HandleFunc("/api/cert/install", s.installCert)
+	s.mux.HandleFunc("/api/cert/uninstall", s.uninstallCert)
 	s.mux.HandleFunc("/api/intercept", s.intercept)
 	s.mux.Handle("/flowStatistics", FlowStatistics(opts.Tracker))
 	return s
@@ -237,6 +242,22 @@ func (s *Server) installCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.opts.InstallCert(s.opts.CA.CertPath()); err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) uninstallCert(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorized(r) {
+		writeJSONStatus(w, http.StatusUnauthorized, map[string]string{"error": "无效的令牌"})
+		return
+	}
+	if err := s.opts.UninstallCert(s.opts.CA.CertPath()); err != nil {
 		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

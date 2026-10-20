@@ -1,6 +1,8 @@
 package certs
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +14,7 @@ import (
 
 type commandRunner func(name string, args ...string) error
 type fileCopier func(src, dst string) error
+type fileRemover func(path string) error
 
 // Install 把 certPath 指向的 CA 证书加入系统信任库，需要管理员/root 权限。
 func Install(certPath string) error {
@@ -41,6 +44,73 @@ func install(certPath, goos string, run commandRunner, copyFile fileCopier) erro
 		return fmt.Errorf("不支持的平台 %s，请手动导入证书 %s", goos, certPath)
 	}
 	return nil
+}
+
+// Uninstall 把 CA 证书从系统信任库移除，需要管理员/root 权限。
+func Uninstall(certPath string) error {
+	return uninstall(certPath, runtime.GOOS, runCommand, os.Remove)
+}
+
+func uninstall(certPath, goos string, run commandRunner, remove fileRemover) error {
+	switch goos {
+	case "windows":
+		thumbprint, err := certThumbprint(certPath)
+		if err != nil {
+			return err
+		}
+		if err := run("certutil", "-delstore", "Root", thumbprint); err != nil {
+			if isNotFound(err) {
+				return nil
+			}
+			return fmt.Errorf("certutil 删除失败（可能需要管理员权限）: %w", err)
+		}
+	case "darwin":
+		thumbprint, err := certThumbprint(certPath)
+		if err != nil {
+			return err
+		}
+		if err := run("security", "delete-certificate", "-Z", thumbprint, "-t",
+			"/Library/Keychains/System.keychain"); err != nil {
+			if isNotFound(err) {
+				return nil
+			}
+			return fmt.Errorf("security 删除失败（可能需要 sudo）: %w", err)
+		}
+	case "linux":
+		const dest = "/usr/local/share/ca-certificates/fastgithub.crt"
+		if err := remove(dest); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("删除 %s 失败（需要 root）: %w", dest, err)
+		}
+		if err := run("update-ca-certificates"); err != nil {
+			return fmt.Errorf("update-ca-certificates 失败（可能需要 root）: %w", err)
+		}
+	default:
+		return fmt.Errorf("不支持的平台 %s，请手动移除证书 %s", goos, certPath)
+	}
+	return nil
+}
+
+func isNotFound(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "could not be found") ||
+		strings.Contains(msg, "crypt_e_not_found") ||
+		strings.Contains(msg, "0x80092004") ||
+		strings.Contains(msg, "cannot find")
+}
+
+// certThumbprint 返回 Windows certutil 使用的 SHA-1 指纹（大写十六进制）。
+func certThumbprint(certPath string) (string, error) {
+	data, err := os.ReadFile(certPath)
+	if err != nil {
+		return "", fmt.Errorf("读取证书 %s 失败: %w", certPath, err)
+	}
+	cert, err := parseCertificate(data)
+	if err != nil {
+		return "", fmt.Errorf("解析证书 %s 失败: %w", certPath, err)
+	}
+	sum := sha1.Sum(cert.Raw)
+	return strings.ToUpper(hex.EncodeToString(sum[:])), nil
 }
 
 func runCommand(name string, args ...string) error {

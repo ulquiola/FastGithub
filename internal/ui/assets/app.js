@@ -48,6 +48,9 @@ async function post(path) {
 }
 
 document.getElementById('install-cert').onclick = () => post('/api/cert/install');
+document.getElementById('uninstall-cert').onclick = () => {
+  if (confirm('确定从系统信任库移除 CA？')) post('/api/cert/uninstall');
+};
 document.getElementById('intercept').onclick = () => post('/api/intercept');
 
 loadStatus();

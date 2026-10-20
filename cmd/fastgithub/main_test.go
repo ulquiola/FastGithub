@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"fastgithub-go/internal/certs"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -156,5 +158,39 @@ func TestServiceCommandsRejectExtraArgs(t *testing.T) {
 		if code := run([]string{cmd, "extra"}, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "用法") {
 			t.Fatalf("%s exit=%d stderr=%q", cmd, code, stderr.String())
 		}
+	}
+}
+
+func TestRunUninstallCert(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cacert")
+	if _, err := certs.LoadOrCreate(dir); err != nil {
+		t.Fatal(err)
+	}
+	var removed string
+	old := uninstallCert
+	uninstallCert = func(path string) error {
+		removed = path
+		return nil
+	}
+	defer func() { uninstallCert = old }()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"uninstall-cert", "--dir", dir}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d stderr = %s", code, stderr.String())
+	}
+	if removed == "" || !strings.Contains(removed, "fastgithub.crt") {
+		t.Fatalf("removed = %q", removed)
+	}
+	if !strings.Contains(stdout.String(), "已从系统信任库移除") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestRunUninstallCertMissingCA(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"uninstall-cert", "--dir", filepath.Join(t.TempDir(), "missing")}, &stdout, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "不存在") {
+		t.Fatalf("exit = %d stderr = %q", code, stderr.String())
 	}
 }

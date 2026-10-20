@@ -40,18 +40,8 @@ type Authority struct {
 
 // LoadOrCreate 从 dir 加载 CA；证书与私钥都不存在时生成一套。
 func LoadOrCreate(dir string) (*Authority, error) {
-	if dir == "" {
-		dir = DefaultDir
-	}
-	certPath := filepath.Join(dir, certFileName)
-	keyPath := filepath.Join(dir, keyFileName)
-	certExists := fileExists(certPath)
-	if !certExists {
-		if legacy := filepath.Join(dir, legacyCertFileName); fileExists(legacy) {
-			certPath, certExists = legacy, true
-		}
-	}
-	keyExists := fileExists(keyPath)
+	dir = defaultDir(dir)
+	certPath, keyPath, certExists, keyExists := resolvePaths(dir)
 	switch {
 	case certExists && keyExists:
 		return load(dir, certPath, keyPath)
@@ -62,6 +52,46 @@ func LoadOrCreate(dir string) (*Authority, error) {
 	default:
 		return nil, fmt.Errorf("私钥 %s 存在但证书 %s 缺失", keyPath, certPath)
 	}
+}
+
+// Load 加载已存在的 CA；缺失时返回错误，不会生成新 CA。
+func Load(dir string) (*Authority, error) {
+	dir = defaultDir(dir)
+	certPath, keyPath, certExists, keyExists := resolvePaths(dir)
+	if !certExists || !keyExists {
+		return nil, fmt.Errorf("CA 不存在于 %s", dir)
+	}
+	return load(dir, certPath, keyPath)
+}
+
+// CertPath 返回已存在 CA 证书的路径，不读取私钥、不做规范化写入。
+func CertPath(dir string) (string, error) {
+	dir = defaultDir(dir)
+	certPath, _, certExists, _ := resolvePaths(dir)
+	if !certExists {
+		return "", fmt.Errorf("CA 证书不存在于 %s", dir)
+	}
+	return certPath, nil
+}
+
+func defaultDir(dir string) string {
+	if dir == "" {
+		return DefaultDir
+	}
+	return dir
+}
+
+func resolvePaths(dir string) (certPath, keyPath string, certExists, keyExists bool) {
+	dir = defaultDir(dir)
+	certPath = filepath.Join(dir, certFileName)
+	keyPath = filepath.Join(dir, keyFileName)
+	certExists = fileExists(certPath)
+	if !certExists {
+		if legacy := filepath.Join(dir, legacyCertFileName); fileExists(legacy) {
+			certPath, certExists = legacy, true
+		}
+	}
+	return certPath, keyPath, certExists, fileExists(keyPath)
 }
 
 func fileExists(path string) bool {

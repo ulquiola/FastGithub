@@ -22,6 +22,7 @@ const usage = `用法: fastgithub <命令>
 命令:
   config validate [--path 文件]        校验配置
   install-cert [--dir 目录]            生成 CA 并加入系统信任库（需管理员/root）
+  uninstall-cert [--dir 目录]          从系统信任库移除 CA（需管理员/root）
   install                              安装系统服务（需管理员/root）
   uninstall                            卸载系统服务
   start                                启动系统服务
@@ -31,8 +32,9 @@ const usage = `用法: fastgithub <命令>
   version                              打印版本信息
 `
 
-// installCert 可在测试中替换，避免真正修改系统信任库。
+// installCert / uninstallCert 可在测试中替换，避免真正修改系统信任库。
 var installCert = certs.Install
+var uninstallCert = certs.Uninstall
 
 func main() {
 	// Windows 服务由 SCM 拉起时先注册控制处理器；交互运行时该调用失败并继续。
@@ -61,6 +63,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "install-cert":
 		if err := runInstallCert(args[1:], stdout); err != nil {
+			fmt.Fprintln(stderr, "错误: "+err.Error())
+			return 1
+		}
+		return 0
+	case "uninstall-cert":
+		if err := runUninstallCert(args[1:], stdout); err != nil {
 			fmt.Fprintln(stderr, "错误: "+err.Error())
 			return 1
 		}
@@ -144,6 +152,28 @@ func runInstallCert(args []string, stdout io.Writer) error {
 		return err
 	}
 	fmt.Fprintln(stdout, "已加入系统信任库")
+	return nil
+}
+
+func runUninstallCert(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("uninstall-cert", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	dir := fs.String("dir", certs.DefaultDir, "CA 证书目录")
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("参数错误: %w", err)
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("用法: fastgithub uninstall-cert [--dir 目录]")
+	}
+	certPath, err := certs.CertPath(*dir)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "CA 证书: %s\n", certPath)
+	if err := uninstallCert(certPath); err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, "已从系统信任库移除")
 	return nil
 }
 

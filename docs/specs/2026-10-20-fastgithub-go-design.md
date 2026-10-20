@@ -304,10 +304,10 @@ func (d *Dialer) DialTLS(ctx context.Context, t Target) (*tls.Conn, error)
 - CA：RSA 2048，`CN=FastGithub`，有效期 10 年，`BasicConstraints`（critical，CA=true，pathLen=1）、`KeyUsage`（digitalSignature|CrlSign|KeyCertSign）、`EKU`（serverAuth+clientAuth）、`SKI`、`SAN`（CN 值）。
 - 叶子：RSA 2048，`CN=<domain>`，有效期 1 年（不超过 CA），`AKI` 取自 CA 的 `SKI`，`SAN` = 域名 + 机器名 + `127.0.0.1` + `::1`，`EKU` 同 CA。
 - 存储：`cacert/fastgithub.key`（PKCS#1 PEM，权限 0600）、`cacert/fastgithub.crt`（0700 目录）；兼容读取旧版的 `.cer`。
-- 信任安装：
-  - Windows：`certutil -addstore -f Root <crt>`，失败提示手动导入；
-  - Linux：复制到 `/usr/local/share/ca-certificates/fastgithub.crt` 后 `update-ca-certificates`；
-  - macOS：`security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain`。
+- 信任安装与卸载：
+  - Windows：`certutil -addstore -f Root <crt>`；卸载用 `certutil -delstore Root <SHA1 指纹>`；
+  - Linux：复制到 `/usr/local/share/ca-certificates/fastgithub.crt` 后 `update-ca-certificates`；卸载删除该文件后再次执行 `update-ca-certificates`；
+  - macOS：`security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain`；卸载用 `security delete-certificate -Z <SHA1 指纹> -t /Library/Keychains/System.keychain`（按指纹精确删除）。
 - 叶子缓存：`map[string]*tls.Certificate` + 过期清理；同一域名复用，避免每连接重签。
 
 ### 7.4 mitm
@@ -355,6 +355,7 @@ function FindProxyForURL(url, host){
 | GET | `/api/logs` | 否 | SSE 日志流（环形缓冲 1000 条） |
 | GET | `/api/cert` | 否 | 下载 CA |
 | POST | `/api/cert/install` | 是 | 安装并信任 CA |
+| POST | `/api/cert/uninstall` | 是 | 从系统信任库移除 CA |
 | POST | `/api/intercept` | 是 | 预留（当前 501，后续实现运行时开关） |
 | GET | `/flowStatistics` | 否 | 兼容端点，字段 `TotalRead/TotalWrite/ReadRate/WriteRate`（PascalCase）；同时注册在 38457 与 Windows 的 80 上 |
 

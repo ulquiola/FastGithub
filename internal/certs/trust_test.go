@@ -1,11 +1,14 @@
 package certs
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -106,5 +109,94 @@ func TestCopyFile(t *testing.T) {
 	}
 	if err := copyFile(filepath.Join(dir, "missing"), dst); err == nil {
 		t.Fatal("源文件不存在应报错")
+	}
+}
+
+func TestUninstallCommands(t *testing.T) {
+	ca, err := LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha1.Sum(ca.Certificate().Raw)
+	thumb := strings.ToUpper(hex.EncodeToString(sum[:]))
+
+	// macOS：按 SHA-1 精确删除并清除信任设置。
+	var darwinCalls []commandCall
+	runDarwin := func(name string, args ...string) error {
+		darwinCalls = append(darwinCalls, commandCall{name, args})
+		return nil
+	}
+	if err := uninstall(ca.CertPath(), "darwin", runDarwin, func(string) error { return nil }); err != nil {
+		t.Fatalf("darwin uninstall: %v", err)
+	}
+	wantDarwin := []commandCall{{"security", []string{"delete-certificate", "-Z", thumb, "-t", "/Library/Keychains/System.keychain"}}}
+	if !reflect.DeepEqual(darwinCalls, wantDarwin) {
+		t.Fatalf("darwin 命令 = %#v", darwinCalls)
+	}
+
+	// Linux：删除 ca-certificates 文件并刷新。
+	var linuxCalls []commandCall
+	runLinux := func(name string, args ...string) error {
+		linuxCalls = append(linuxCalls, commandCall{name, args})
+		return nil
+	}
+	var removed []string
+	remove := func(path string) error {
+		removed = append(removed, path)
+		return nil
+	}
+	if err := uninstall("/tmp/ca.crt", "linux", runLinux, remove); err != nil {
+		t.Fatalf("linux uninstall: %v", err)
+	}
+	if len(removed) != 1 || removed[0] != "/usr/local/share/ca-certificates/fastgithub.crt" {
+		t.Fatalf("removed = %v", removed)
+	}
+	if len(linuxCalls) != 1 || linuxCalls[0].name != "update-ca-certificates" {
+		t.Fatalf("linux 命令 = %#v", linuxCalls)
+	}
+
+	// Windows：按 SHA-1 指纹删除。
+	var winCalls []commandCall
+	runWin := func(name string, args ...string) error {
+		winCalls = append(winCalls, commandCall{name, args})
+		return nil
+	}
+	if err := uninstall(ca.CertPath(), "windows", runWin, func(string) error { return nil }); err != nil {
+		t.Fatalf("windows uninstall: %v", err)
+	}
+	wantWin := []commandCall{{"certutil", []string{"-delstore", "Root", thumb}}}
+	if !reflect.DeepEqual(winCalls, wantWin) {
+		t.Fatalf("windows 命令 = %#v", winCalls)
+	}
+
+	if err := uninstall("/tmp/ca.crt", "plan9", runWin, remove); err == nil {
+		t.Fatal("不支持的平台应报错")
+	}
+}
+
+func TestUninstallPropagatesErrors(t *testing.T) {
+	ca, err := LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	boom := errors.New("boom")
+	if err := uninstall(ca.CertPath(), "darwin", func(string, ...string) error { return boom }, func(string) error { return nil }); !errors.Is(err, boom) {
+		t.Fatalf("err = %v", err)
+	}
+	if err := uninstall(ca.CertPath(), "linux", func(string, ...string) error { return nil }, func(string) error { return boom }); !errors.Is(err, boom) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestUninstallWindowsNotFoundIsIdempotent(t *testing.T) {
+	ca, err := LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = uninstall(ca.CertPath(), "windows", func(string, ...string) error {
+		return errors.New("CertUtil: -delstore FAILED: 0x80092004 (CRYPT_E_NOT_FOUND)")
+	}, func(string) error { return nil })
+	if err != nil {
+		t.Fatalf("证书不存在时应视为成功: %v", err)
 	}
 }
