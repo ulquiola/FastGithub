@@ -1,6 +1,7 @@
 package intercept
 
 import (
+	"bytes"
 	"encoding/binary"
 	"testing"
 
@@ -56,7 +57,7 @@ func splitLabels(name string) [][]byte {
 func TestDNSResponseA(t *testing.T) {
 	store := testStore(t, "github.com", "*.githubusercontent.com")
 	query := buildDNSQuery("github.com", 1, 0xBEEF)
-	resp, ok, err := DNSResponse(query, store)
+	resp, ok, err := DNSResponse(query, store, true)
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
@@ -83,7 +84,7 @@ func TestDNSResponseA(t *testing.T) {
 
 func TestDNSResponseAAAA(t *testing.T) {
 	store := testStore(t, "github.com")
-	resp, ok, err := DNSResponse(buildDNSQuery("github.com", 28, 1), store)
+	resp, ok, err := DNSResponse(buildDNSQuery("github.com", 28, 1), store, true)
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
@@ -102,44 +103,83 @@ func TestDNSResponseAAAA(t *testing.T) {
 
 func TestDNSResponseWildcardMatch(t *testing.T) {
 	store := testStore(t, "*.githubusercontent.com")
-	if _, ok, _ := DNSResponse(buildDNSQuery("a.githubusercontent.com", 1, 1), store); !ok {
+	if _, ok, _ := DNSResponse(buildDNSQuery("a.githubusercontent.com", 1, 1), store, true); !ok {
 		t.Fatal("通配规则应命中")
 	}
 }
 
 func TestDNSResponseNotMatched(t *testing.T) {
 	store := testStore(t, "github.com")
-	_, ok, err := DNSResponse(buildDNSQuery("example.com", 1, 1), store)
+	_, ok, err := DNSResponse(buildDNSQuery("example.com", 1, 1), store, true)
 	if err != nil || ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
-	if _, ok, _ := DNSResponse(buildDNSQuery("github.com", 16, 1), store); ok {
+	if _, ok, _ := DNSResponse(buildDNSQuery("github.com", 16, 1), store, true); ok {
 		t.Fatal("TXT 查询不应应答")
 	}
-	if _, ok, _ := DNSResponse(buildDNSQuery("github.com", 1, 1), testStore(t)); ok {
+	if _, ok, _ := DNSResponse(buildDNSQuery("github.com", 1, 1), testStore(t), true); ok {
 		t.Fatal("空 Store 不应应答")
 	}
 }
 
 func TestDNSResponseRejectsBadQueries(t *testing.T) {
 	store := testStore(t, "github.com")
-	if _, _, err := DNSResponse([]byte{1, 2, 3}, store); err == nil {
+	if _, _, err := DNSResponse([]byte{1, 2, 3}, store, true); err == nil {
 		t.Fatal("短查询应报错")
 	}
 	// 压缩指针不支持。
 	query := buildDNSQuery("github.com", 1, 1)
 	query[12] = 0xC0
-	if _, _, err := DNSResponse(query, store); err == nil {
+	if _, _, err := DNSResponse(query, store, true); err == nil {
 		t.Fatal("压缩指针应报错")
 	}
 	// 响应包不再应答。
 	resp := buildDNSQuery("github.com", 1, 1)
 	resp[2] |= 0x80
-	if _, ok, _ := DNSResponse(resp, store); ok {
+	if _, ok, _ := DNSResponse(resp, store, true); ok {
 		t.Fatal("响应包不应应答")
 	}
 }
 
 func isPtr(b []byte, offset int) bool {
 	return len(b) == 2 && b[0]&0xC0 == 0xC0 && int(b[0]&0x3F)<<8|int(b[1]) == offset
+}
+
+func TestDNSResponseDisablesAAAA(t *testing.T) {
+	store := testStore(t, "github.com")
+	resp, ok, err := DNSResponse(buildDNSQuery("github.com", 28, 1), store, false)
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if binary.BigEndian.Uint16(resp[6:8]) != 0 {
+		t.Fatal("禁用 AAAA 时应返回 NODATA")
+	}
+	if _, ok, _ := DNSResponse(buildDNSQuery("github.com", 1, 1), store, false); !ok {
+		t.Fatal("A 查询仍应应答")
+	}
+}
+
+func TestDNSResponseDisablesAAAADetails(t *testing.T) {
+	store := testStore(t, "github.com")
+	query := buildDNSQuery("github.com", 28, 0x1234)
+	resp, ok, err := DNSResponse(query, store, false)
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if binary.BigEndian.Uint16(resp[0:2]) != 0x1234 {
+		t.Fatal("ID 未复制")
+	}
+	flags := binary.BigEndian.Uint16(resp[2:4])
+	if flags&0x8000 == 0 || flags&0x0400 == 0 || flags&0x0080 == 0 || flags&0x0100 == 0 {
+		t.Fatalf("flags = %#x", flags)
+	}
+	if binary.BigEndian.Uint16(resp[6:8]) != 0 {
+		t.Fatal("ANCOUNT 应为 0")
+	}
+	if len(resp) != 28 {
+		t.Fatalf("resp len = %d，期望仅问题段", len(resp))
+	}
+	if !bytes.Equal(resp[12:28], query[12:28]) {
+		t.Fatal("问题段应原样复制")
+	}
 }

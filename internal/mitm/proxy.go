@@ -46,6 +46,30 @@ func (s *Server) ServeTLS(ctx context.Context, conn net.Conn) {
 	s.serveTransparentTLS(ctx, conn)
 }
 
+// ServeForward 把已接受的连接转发到固定上游（SSH/Git 透明入口）。
+func (s *Server) ServeForward(ctx context.Context, conn net.Conn, host string, port int, method string) {
+	domain, _ := s.store.Lookup(host)
+	upstream, err := s.dialer.DialTCP(ctx, dialer.Target{Host: host, Port: port, Domain: domain})
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Log(flow.Entry{Time: time.Now(), Domain: host, Method: method, Status: http.StatusBadGateway})
+		}
+		conn.Close()
+		return
+	}
+	start := time.Now()
+	clientCount := &countingConn{Conn: conn}
+	Tunnel(ctx, clientCount, upstream, s.idle)
+	if s.logger != nil {
+		s.logger.Log(flow.Entry{
+			Time: time.Now(), Domain: host, Method: method, Status: http.StatusOK,
+			Duration: time.Since(start),
+			Read:     clientCount.read.Load(),
+			Write:    clientCount.write.Load(),
+		})
+	}
+}
+
 // ServeHTTPConn 处理已接受的明文 HTTP 连接（80 入口）。
 func (s *Server) ServeHTTPConn(ctx context.Context, conn net.Conn) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

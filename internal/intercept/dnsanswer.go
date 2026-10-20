@@ -12,7 +12,8 @@ import (
 const dnsTTL = 300
 
 // DNSResponse 为命中域名的 A/AAAA 查询构造应答；未命中返回 ok=false。
-func DNSResponse(query []byte, store *config.Store) ([]byte, bool, error) {
+// allowAAAA=false 时 AAAA 返回 NOERROR/NODATA，促使客户端回退 IPv4。
+func DNSResponse(query []byte, store *config.Store, allowAAAA bool) ([]byte, bool, error) {
 	if len(query) < 12 {
 		return nil, false, fmt.Errorf("DNS 查询过短")
 	}
@@ -42,9 +43,13 @@ func DNSResponse(query []byte, store *config.Store) ([]byte, bool, error) {
 	queryFlags := binary.BigEndian.Uint16(resp[2:4])
 	// QR | AA | RA，保留 RD。
 	binary.BigEndian.PutUint16(resp[2:4], 0x8000|0x0400|0x0080|(queryFlags&0x0100))
-	binary.BigEndian.PutUint16(resp[6:8], 1)  // ANCOUNT
-	binary.BigEndian.PutUint16(resp[8:10], 0) // NSCOUNT
-	binary.BigEndian.PutUint16(resp[10:12], 0)
+	binary.BigEndian.PutUint16(resp[8:10], 0)  // NSCOUNT
+	binary.BigEndian.PutUint16(resp[10:12], 0) // ARCOUNT
+	if qtype == 28 && !allowAAAA {
+		binary.BigEndian.PutUint16(resp[6:8], 0) // NODATA
+		return resp, true, nil
+	}
+	binary.BigEndian.PutUint16(resp[6:8], 1) // ANCOUNT
 
 	resp = append(resp, 0xC0, 0x0C) // 指向问题段的名字
 	resp = binary.BigEndian.AppendUint16(resp, qtype)

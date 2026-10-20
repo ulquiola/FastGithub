@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"unsafe"
 
@@ -161,11 +160,7 @@ func Start(ctx context.Context, cfg Config) (*Handle, error) {
 	for actual, preferred := range cfg.PortMap {
 		preferredToActual[preferred] = actual
 	}
-	tcpFilterParts := []string{"tcp.DstPort == 443", "tcp.DstPort == 80"}
-	for actual := range cfg.PortMap {
-		tcpFilterParts = append(tcpFilterParts, fmt.Sprintf("tcp.SrcPort == %d", actual))
-	}
-	tcpFilter := "loopback and (" + strings.Join(tcpFilterParts, " or ") + ")"
+	tcpFilter := TCPFilter(cfg.PortMap)
 
 	dnsHandle, err := w.openHandle("udp.DstPort == 53")
 	if err != nil {
@@ -178,7 +173,7 @@ func Start(ctx context.Context, cfg Config) (*Handle, error) {
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
-	go w.loopDNS(ctx, dnsHandle, cfg.Store)
+	go w.loopDNS(ctx, dnsHandle, cfg.Store, !cfg.DisableAAAA)
 	go w.loopTCP(ctx, tcpHandle, cfg.PortMap, preferredToActual)
 	return &Handle{
 		cancel: cancel,
@@ -189,7 +184,7 @@ func Start(ctx context.Context, cfg Config) (*Handle, error) {
 	}, nil
 }
 
-func (w *winDivert) loopDNS(ctx context.Context, handle syscall.Handle, store *config.Store) {
+func (w *winDivert) loopDNS(ctx context.Context, handle syscall.Handle, store *config.Store, allowAAAA bool) {
 	buf := make([]byte, 65535)
 	for ctx.Err() == nil {
 		var addr Address
@@ -206,7 +201,7 @@ func (w *winDivert) loopDNS(ctx context.Context, handle syscall.Handle, store *c
 			w.sendPacket(handle, packet, &addr)
 			continue
 		}
-		payload, matched, err := DNSResponse(pkt.Payload, store)
+		payload, matched, err := DNSResponse(pkt.Payload, store, allowAAAA)
 		if err != nil || !matched {
 			w.sendPacket(handle, packet, &addr)
 			continue
@@ -240,17 +235,13 @@ func (w *winDivert) loopTCP(ctx context.Context, handle syscall.Handle, actualTo
 			w.sendPacket(handle, packet, &addr)
 			continue
 		}
-		changed := false
-		if pkt.DstPort == 443 || pkt.DstPort == 80 {
-			if actual, ok := preferredToActual[int(pkt.DstPort)]; ok {
-				pkt.SetDstPort(uint16(actual))
-				changed = true
-			}
-		} else if preferred, ok := actualToPreferred[int(pkt.SrcPort)]; ok {
-			pkt.SetSrcPort(uint16(preferred))
-			changed = true
+		src, dst, changed := RemapTCPPorts(pkt.SrcPort, pkt.DstPort, actualToPreferred, preferredToActual)
+		if changed {
+			pkt.SetSrcPort(src)
+			pkt.SetDstPort(dst)
 		}
 		if changed {
+			addr.SetImpostor(true)
 			if err := RecalculateChecksums(pkt.Raw); err != nil {
 				w.sendPacket(handle, packet, &addr)
 				continue

@@ -445,3 +445,69 @@ func TestFlowStatisticsHandler(t *testing.T) {
 		t.Fatalf("body = %s", body)
 	}
 }
+
+func TestServeForward(t *testing.T) {
+	server, _ := newTestServer(t, map[string]*config.Domain{"github.com": {IP: "127.0.0.1"}})
+	logger := newCaptureLogger()
+	server.SetLogger(logger)
+
+	echoLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echoLn.Close()
+	go func() {
+		conn, err := echoLn.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		io.Copy(conn, conn)
+	}()
+
+	serverSide, clientSide := net.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go server.ServeForward(ctx, serverSide, "github.com", echoLn.Addr().(*net.TCPAddr).Port, "SSH")
+
+	clientSide.Write([]byte("hi"))
+	buf := make([]byte, 2)
+	if _, err := io.ReadFull(clientSide, buf); err != nil {
+		t.Fatal(err)
+	}
+	if string(buf) != "hi" {
+		t.Fatalf("echo = %q", buf)
+	}
+	clientSide.Close()
+
+	select {
+	case e := <-logger.entries:
+		if e.Method != "SSH" || e.Domain != "github.com" || e.Read != 2 || e.Write != 2 {
+			t.Fatalf("entry = %+v", e)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("未记录转发日志")
+	}
+}
+
+func TestServeForwardDialFailure(t *testing.T) {
+	server, _ := newTestServer(t, map[string]*config.Domain{"github.com": {}})
+	logger := newCaptureLogger()
+	server.SetLogger(logger)
+	serverSide, clientSide := net.Pipe()
+	go server.ServeForward(context.Background(), serverSide, "github.com", 1, "SSH")
+
+	clientSide.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := clientSide.Read(make([]byte, 1)); err == nil {
+		t.Fatal("拨号失败后客户端连接应关闭")
+	}
+	select {
+	case e := <-logger.entries:
+		if e.Method != "SSH" || e.Status != http.StatusBadGateway {
+			t.Fatalf("entry = %+v", e)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("未记录失败日志")
+	}
+	clientSide.Close()
+}

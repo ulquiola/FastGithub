@@ -30,7 +30,7 @@ func SelfTestText() string {
 		return b.String()
 	}
 	query := sampleQuery("github.com", 1, 0x1234)
-	resp, ok, err := DNSResponse(query, store)
+	resp, ok, err := DNSResponse(query, store, true)
 	if err != nil || !ok {
 		fmt.Fprintf(&b, "DNS 自检: 未命中或解析失败 (ok=%v err=%v)\n", ok, err)
 		return b.String()

@@ -332,10 +332,12 @@ function FindProxyForURL(url, host){
 ### 7.5 intercept（Windows）
 
 - **加载**：按 `intercept.driver_dir` → exe 同目录 → `windivert\` → `%PATH%` 找 `WinDivert.dll`，`WinDivert64.sys` 必须同目录；`syscall.NewLazyDLL` 取符号：`WinDivertOpen/Recv/Send/Close/HelperCalcChecksums`。
-- **句柄**：① `udp.DstPort == 53`；② `loopback and (tcp.DstPort == 443 or 80 or 22 or 9418 or tcp.SrcPort == <实际监听端口>)`。
+- **句柄**：① `udp.DstPort == 53`；② `loopback and (tcp.DstPort == 443/80/22/9418 or tcp.SrcPort == <对应实际监听端口>)`。
 - **地址结构**：用 WinDivert 2.x 的 80 字节 WINDIVERT_ADDRESS（flags 在 offset 8，union 在 16）；`Layer`/`Outbound`/`Loopback`/`Impostor` 等按 `windivert.h` 偏移定义；启动时 `windivert-selftest` 打印解析结果供人工核对。**这是本设计唯一无法在本机验证的部分**（见 §10）。
 - **DNS 应答**：解析 QNAME/QTYPE，命中规则则构造 `A 127.0.0.1` / `AAAA ::1`（TTL 300s），复制 ID 与 question，置 `QR|AA|RD|RA`，交换 IP/端口，置 `Impostor`，重算 IP/UDP 校验和；未命中放行。
 - **TCP 重映射**：仅改源/目标端口与校验和，逻辑等价 `TcpInterceptor.ModifyTcpPacket`。
+- **SSH/Git 转发**：22/9418 重映射到本地 listener 后固定转发到 `github.com:22` / `github.com:9418`（与原版 `GithubSshReverseProxyHandler`/`GithubGitReverseProxyHandler` 一致）。
+- **IPv6 降级**：任一 `::1` 监听失败时，AAAA 查询返回 NOERROR/NODATA，促使客户端回退 IPv4。
 - **降级**：非管理员 / DLL 缺失 / `Open` 失败 → 记警告，透明入口不启用，显式代理仍可用；`intercept.mode="off"` 可强制关闭。
 
 ### 7.6 flow
@@ -504,5 +506,4 @@ fastgithub-go/
 - IPv6 上游：原版按 `OSSupportsIPv6` 决定是否查 AAAA；Go 版默认查，可配置关闭。
 - 是否在内置 DoH 之外保留"外挂 dnscrypt-proxy"兼容开关：暂不做，配置里出现 `dnscrypt` 键会报错。
 - 性能基准（并发连接数、单连接吞吐）在 M3 补 `go test -bench`。
-- **透明 22/9418 转发语义（M3 前确认）**：当前 DNS 只把命中域名指向回环，listener 无法从连接恢复原始域名；原版如何为 SSH/git 协议选择上游需对照源码确认。当前显式代理与 443/80 MITM 不受影响。
 - **`@ipaddress` 展开为 IP 字面量作 SNI 的语义（M1-D 已确认）**：Go 与 .NET 对 IP 字面量都不发送 SNI（RFC 6066），实际等价于"不发 SNI"。`dialer_test.go` 用假 TLS 服务器断言 `@ipaddress` 的 `ClientHello.ServerName` 为空；若将来确需发送 IP 字面量 SNI，标准库不支持，需自定义 ClientHello，成本较高。
