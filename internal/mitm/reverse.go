@@ -41,7 +41,12 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if matched {
 		destination = domain.Destination
 	}
-	prefix, err := config.JoinDestination(scheme, host, destination)
+	// 保留请求里的非默认端口（CONNECT 目标可能不是 443）。
+	upstreamHost := host
+	if _, port, err := net.SplitHostPort(r.Host); err == nil && port != "" {
+		upstreamHost = net.JoinHostPort(host, port)
+	}
+	prefix, err := config.JoinDestination(scheme, upstreamHost, destination)
 	if err != nil {
 		http.Error(w, "无效的 destination: "+err.Error(), http.StatusBadGateway)
 		return
