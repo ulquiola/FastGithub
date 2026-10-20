@@ -52,7 +52,8 @@ func run(name string, args ...string) ([]byte, error) {
 
 func get(port int, goos string, run runner) (Status, error) {
 	if goos != "darwin" {
-		return Status{}, ErrUnsupported
+		// 不支持的平台不是错误：UI 需要区分“不可用”和“检测失败”。
+		return Status{Supported: false}, nil
 	}
 	service, err := primaryService(run)
 	if err != nil {

@@ -125,8 +125,9 @@ func TestDisableDarwin(t *testing.T) {
 }
 
 func TestUnsupportedPlatforms(t *testing.T) {
-	if _, err := get(38457, "windows", nil); !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("get windows err = %v", err)
+	status, err := get(38457, "windows", nil)
+	if err != nil || status.Supported {
+		t.Fatalf("get windows = %+v, %v", status, err)
 	}
 	if err := enable(38457, "linux", nil); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("enable linux err = %v", err)
