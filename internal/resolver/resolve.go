@@ -142,46 +142,58 @@ func (r *Resolver) lookupType(ctx context.Context, domain string, qtype uint16) 
 	if err != nil {
 		return nil, 0, err
 	}
-	var errs []error
+	type source struct {
+		addr string
+		doh  bool
+	}
 	now := r.now()
+	var sources []source
 	for _, endpoint := range r.healthyEndpoints(now) {
-		attemptCtx, cancel := context.WithTimeout(ctx, r.timeout)
-		resp, err := r.doh.query(attemptCtx, endpoint, msg)
-		cancel()
-		if err != nil {
-			r.health.fail(endpoint, now)
-			errs = append(errs, fmt.Errorf("DoH %s: %w", endpoint, err))
-			continue
-		}
-		ips, ttl, err := parseAnswer(resp, id, domain, qtype)
-		if err != nil {
-			if !errors.Is(err, errNXDOMAIN) {
-				r.health.fail(endpoint, now)
-			}
-			errs = append(errs, fmt.Errorf("DoH %s: %w", endpoint, err))
-			if errors.Is(err, errNXDOMAIN) {
-				return nil, 0, err
-			}
-			continue
-		}
-		r.health.ok(endpoint)
-		return ips, ttl, nil
+		sources = append(sources, source{addr: endpoint, doh: true})
 	}
 	for _, server := range r.fallback {
-		attemptCtx, cancel := context.WithTimeout(ctx, r.timeout)
-		resp, err := queryTCP(attemptCtx, server, msg)
+		sources = append(sources, source{addr: server})
+	}
+
+	var errs []error
+	for i, src := range sources {
+		if ctx.Err() != nil {
+			break
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, r.attemptTimeout(ctx, len(sources)-i))
+		var resp []byte
+		var err error
+		if src.doh {
+			resp, err = r.doh.query(attemptCtx, src.addr, msg)
+		} else {
+			resp, err = queryTCP(attemptCtx, src.addr, msg)
+		}
 		cancel()
+
+		label := "DNS"
+		if src.doh {
+			label = "DoH"
+		}
 		if err != nil {
-			errs = append(errs, fmt.Errorf("DNS %s: %w", server, err))
+			if src.doh && ctx.Err() == nil {
+				r.health.fail(src.addr, now)
+			}
+			errs = append(errs, fmt.Errorf("%s %s: %w", label, src.addr, err))
 			continue
 		}
 		ips, ttl, err := parseAnswer(resp, id, domain, qtype)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("DNS %s: %w", server, err))
+			if src.doh && ctx.Err() == nil && !errors.Is(err, errNXDOMAIN) && !errors.Is(err, errNoRecords) {
+				r.health.fail(src.addr, now)
+			}
+			errs = append(errs, fmt.Errorf("%s %s: %w", label, src.addr, err))
 			if errors.Is(err, errNXDOMAIN) {
 				return nil, 0, err
 			}
 			continue
+		}
+		if src.doh {
+			r.health.ok(src.addr)
 		}
 		return ips, ttl, nil
 	}
@@ -189,6 +201,32 @@ func (r *Resolver) lookupType(ctx context.Context, domain string, qtype uint16) 
 		return nil, 0, fmt.Errorf("没有可用的 DNS 源")
 	}
 	return nil, 0, errors.Join(errs...)
+}
+
+// attemptTimeout 把剩余总预算按剩余源数量均分，避免首个黑洞源吃光预算。
+func (r *Resolver) attemptTimeout(ctx context.Context, remainingSources int) time.Duration {
+	timeout := r.timeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return time.Millisecond
+		}
+		if remainingSources < 1 {
+			remainingSources = 1
+		}
+		share := remaining / time.Duration(remainingSources)
+		if share < 50*time.Millisecond {
+			share = 50 * time.Millisecond
+		}
+		if share > remaining {
+			share = remaining
+		}
+		timeout = share
+	}
+	if timeout > r.timeout {
+		timeout = r.timeout
+	}
+	return timeout
 }
 
 // healthyEndpoints 跳过冷却中的端点；全部冷却时仍尝试一轮，避免彻底不可用。
@@ -294,13 +332,6 @@ func parseAnswer(data []byte, id uint16, domain string, qtype uint16) ([]net.IP,
 	if m.Flags&0x0200 != 0 {
 		return nil, 0, fmt.Errorf("DNS 响应被截断")
 	}
-	if len(m.Questions) != 1 {
-		return nil, 0, fmt.Errorf("DNS 响应问题数异常")
-	}
-	q := m.Questions[0]
-	if !strings.EqualFold(strings.TrimSuffix(q.Name, "."), domain) || q.Type != qtype || q.Class != classIN {
-		return nil, 0, fmt.Errorf("DNS 响应问题不匹配")
-	}
 	switch m.rcode() {
 	case 0:
 	case 3:
@@ -308,9 +339,17 @@ func parseAnswer(data []byte, id uint16, domain string, qtype uint16) ([]net.IP,
 	default:
 		return nil, 0, fmt.Errorf("DNS 返回错误码 %d", m.rcode())
 	}
+	// 错误响应可能省略问题段；成功响应必须带且只带一个匹配的问题。
+	if len(m.Questions) != 1 {
+		return nil, 0, fmt.Errorf("DNS 响应问题数异常")
+	}
+	q := m.Questions[0]
+	if !strings.EqualFold(strings.TrimSuffix(q.Name, "."), domain) || q.Type != qtype || q.Class != classIN {
+		return nil, 0, fmt.Errorf("DNS 响应问题不匹配")
+	}
 	ips, ttl := m.addresses(domain, qtype)
 	if len(ips) == 0 {
-		return nil, 0, fmt.Errorf("无 A/AAAA 记录")
+		return nil, 0, errNoRecords
 	}
 	return ips, ttl, nil
 }

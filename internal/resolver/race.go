@@ -89,8 +89,15 @@ func (r *racer) Sort(ctx context.Context, ips []net.IP) []net.IP {
 	})
 	out := make([]net.IP, 0, len(ips))
 	for _, p := range probes {
-		out = append(out, p.ip)
+		if p.ok {
+			out = append(out, p.ip)
+		}
 	}
 	out = append(out, tail...)
+	for _, p := range probes {
+		if !p.ok {
+			out = append(out, p.ip)
+		}
+	}
 	return out
 }

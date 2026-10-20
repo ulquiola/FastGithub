@@ -270,11 +270,11 @@ content      = "这是一个用于示范配置的域名"
 ### 7.1 resolver
 
 - 查询链：DoH（配置顺序，传输/响应失败的端点冷却 30s 后重试）→ 明文 DNS（仅 TCP 可达者）。DoH 用 `net/http` 手写 `application/dns-message` 请求，不引入 DNS 库。
-- 超时：`dns.timeout` 是整次解析的总预算（A/AAAA 并发共享），单个源在该预算内尝试；调用方取消不会写入负缓存。
+- 超时：`dns.timeout` 是整次解析的总预算（A/AAAA 并发共享），剩余预算按剩余源数量均分；调用方取消或预算耗尽时不写负缓存。
 - 报文：自实现 DNS 编解码（question/answer、A/AAAA、压缩指针只读不写），约 300 行。
-- 缓存：`domain→[]IP`（TTL 夹逼 30s~10min）、`IP→latency`（正常 5min / 故障 1min）。并发同键请求用 `singleflight`（自实现，约 40 行）。
-- 竞速：对候选 IP 并发 TCP 拨号（2s 上限），最快者置首位；全部失败则按原序返回。
-- 负缓存：非 socket 错误 30s，socket 错误 10min（对齐原版 `minTimeToLive`/`maxTimeToLive`）。
+- 缓存：`domain→[]IP`（TTL 夹逼 30s~10min，CNAME 链取整链最小 TTL）、`IP→latency`（正常 5min / 故障 1min）。并发同键请求用 `singleflight`（自实现，约 40 行）。
+- 竞速：对候选 IP 并发 TCP 拨号（2s 上限，最多探测 32 个），最快者置首位；全部失败则按原序返回。
+- 负缓存：非 socket 错误 30s，`*net.OpError` 10min（对齐原版 `minTimeToLive`/`maxTimeToLive`）。
 
 ### 7.2 dialer
 

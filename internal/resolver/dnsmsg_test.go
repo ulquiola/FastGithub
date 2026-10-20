@@ -124,17 +124,17 @@ func TestParseRejectsHeaderPointer(t *testing.T) {
 	msg := make([]byte, 14)
 	msg[5] = 1
 	msg[12], msg[13] = 0xC0, 0x00
-	if _, err := parseMessage(msg); err == nil {
-		t.Fatal("指向报文头的压缩指针应报错")
+	if _, err := parseMessage(msg); err == nil || !strings.Contains(err.Error(), "报文头") {
+		t.Fatalf("err = %v，期望拒绝指向报文头的指针", err)
 	}
 }
 
 func TestParseRejectsForwardPointer(t *testing.T) {
-	msg := make([]byte, 20)
+	msg := make([]byte, 30)
 	msg[5] = 1
 	msg[12], msg[13] = 0xC0, 0x14 // 指向 20
-	if _, err := parseMessage(msg); err == nil {
-		t.Fatal("前向压缩指针应报错")
+	if _, err := parseMessage(msg); err == nil || !strings.Contains(err.Error(), "向前引用") {
+		t.Fatalf("err = %v，期望拒绝前向指针", err)
 	}
 }
 

@@ -19,6 +19,9 @@ const (
 // errNXDOMAIN 表示域名不存在；权威否定结果不再尝试其他 DNS 源。
 var errNXDOMAIN = errors.New("域名不存在 (NXDOMAIN)")
 
+// errNoRecords 表示 NOERROR 但没有对应类型的记录（NODATA），不是端点故障。
+var errNoRecords = errors.New("无 A/AAAA 记录")
+
 type dnsQuestion struct {
 	Name  string
 	Type  uint16
