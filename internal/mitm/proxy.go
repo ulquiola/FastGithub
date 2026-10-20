@@ -44,6 +44,13 @@ func (s *Server) SetLogger(l Logger) { s.logger = l }
 // SetStats 设置 /flowStatistics 的处理器。
 func (s *Server) SetStats(h http.Handler) { s.stats = h }
 
+func (s *Server) logConnect(host string, status int) {
+	if s.logger == nil {
+		return
+	}
+	s.logger.Log(flow.Entry{Time: time.Now(), Domain: host, Method: "CONNECT", Status: status})
+}
+
 // ServeConn 根据连接首字节分派 CONNECT、透明 TLS 或普通 HTTP。
 func (s *Server) ServeConn(ctx context.Context, conn net.Conn) {
 	// 首字节读取有超时，避免慢速连接长期占用 goroutine。
@@ -98,6 +105,7 @@ func (s *Server) serveConnect(ctx context.Context, conn net.Conn, br *bufio.Read
 	host, port, err := ReadConnect(br)
 	if err != nil {
 		WriteConnectError(conn, http.StatusBadRequest)
+		s.logConnect("", http.StatusBadRequest)
 		conn.Close()
 		return
 	}
@@ -115,6 +123,7 @@ func (s *Server) serveConnect(ctx context.Context, conn net.Conn, br *bufio.Read
 	upstream, err := s.dialer.DialTCP(ctx, dialer.Target{Host: host, Port: port, Domain: domain})
 	if err != nil {
 		WriteConnectError(conn, http.StatusBadGateway)
+		s.logConnect(host, http.StatusBadGateway)
 		conn.Close()
 		return
 	}
@@ -125,14 +134,13 @@ func (s *Server) serveConnect(ctx context.Context, conn net.Conn, br *bufio.Read
 	}
 	start := time.Now()
 	clientCount := &countingConn{Conn: client}
-	upstreamCount := &countingConn{Conn: upstream}
-	Tunnel(ctx, clientCount, upstreamCount, s.idle)
+	Tunnel(ctx, clientCount, upstream, s.idle)
 	if s.logger != nil {
 		s.logger.Log(flow.Entry{
 			Time: time.Now(), Domain: host, Method: "CONNECT", Status: http.StatusOK,
 			Duration: time.Since(start),
-			Read:     clientCount.read.Load() + upstreamCount.read.Load(),
-			Write:    clientCount.write.Load() + upstreamCount.write.Load(),
+			Read:     clientCount.read.Load(),
+			Write:    clientCount.write.Load(),
 		})
 	}
 }

@@ -6,7 +6,9 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"html"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 
@@ -54,11 +56,37 @@ func New(opts Options) *Server {
 	return s
 }
 
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler 只允许本机访问，并统一加上防嵌入头。
+func (s *Server) Handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !loopbackHost(r.Host) {
+			http.Error(w, "仅允许本机访问", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("X-Frame-Options", "DENY")
+		s.mux.ServeHTTP(w, r)
+	})
+}
+
+func loopbackHost(host string) bool {
+	name := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		name = h
+	}
+	if name == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(name)
+	return ip != nil && ip.IsLoopback()
+}
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 	data, err := assets.ReadFile("assets/index.html")
@@ -67,7 +95,16 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	io.WriteString(w, strings.ReplaceAll(string(data), "{{TOKEN}}", s.opts.Token))
+	w.Header().Set("Cache-Control", "no-store")
+	io.WriteString(w, strings.ReplaceAll(string(data), "{{TOKEN}}", html.EscapeString(s.opts.Token)))
+}
+
+func requireGET(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return false
+	}
+	return true
 }
 
 func staticAsset(path, contentType string) http.HandlerFunc {
@@ -97,6 +134,9 @@ type statusResponse struct {
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
 	fingerprint := sha256.Sum256(s.opts.CA.Certificate().Raw)
 	writeJSON(w, statusResponse{
 		Version:       s.opts.Version,
@@ -114,6 +154,9 @@ type domainJSON struct {
 }
 
 func (s *Server) domains(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
 	stats := s.opts.Store.Stats()
 	out := make([]domainJSON, 0, len(stats))
 	for _, stat := range stats {
@@ -133,6 +176,9 @@ type logEvent struct {
 }
 
 func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "SSE 不可用", http.StatusInternalServerError)
@@ -142,9 +188,9 @@ func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	ch, cancel := s.opts.Ring.Subscribe()
+	ch, backlog, cancel := s.opts.Ring.SubscribeWithBacklog()
 	defer cancel()
-	for _, entry := range s.opts.Ring.Recent() {
+	for _, entry := range backlog {
 		writeLogEvent(w, entry)
 	}
 	flusher.Flush()
@@ -173,8 +219,7 @@ func writeLogEvent(w io.Writer, e flow.Entry) {
 }
 
 func (s *Server) cert(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+	if !requireGET(w, r) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-pem-file")

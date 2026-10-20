@@ -91,13 +91,23 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	out.RequestURI = ""
 	out.Host = r.Host
 	removeHopByHop(out.Header)
-	requestBody := &countingReader{r: out.Body}
-	out.Body = requestBody
+	// 无 body 的请求保持 http.NoBody，否则 Transport 会改成 chunked。
+	var requestBody *countingReader
+	if out.Body != nil && out.Body != http.NoBody {
+		requestBody = &countingReader{r: out.Body}
+		out.Body = requestBody
+	}
+	readBytes := func() int64 {
+		if requestBody == nil {
+			return 0
+		}
+		return requestBody.n.Load()
+	}
 
 	resp, err := p.transport.RoundTrip(out)
 	if err != nil {
 		http.Error(w, "上游请求失败: "+err.Error(), http.StatusBadGateway)
-		p.log(host, r.Method, http.StatusBadGateway, start, requestBody.n.Load(), 0)
+		p.log(host, r.Method, http.StatusBadGateway, start, readBytes(), 0)
 		return
 	}
 	defer resp.Body.Close()
@@ -110,7 +120,7 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 	responseBody := &countingWriter{ResponseWriter: w}
 	io.Copy(responseBody, resp.Body)
-	p.log(host, r.Method, resp.StatusCode, start, requestBody.n.Load(), responseBody.n.Load())
+	p.log(host, r.Method, resp.StatusCode, start, readBytes(), responseBody.n.Load())
 }
 
 func writeShortCircuit(w http.ResponseWriter, resp *config.Response) {

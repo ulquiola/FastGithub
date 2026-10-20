@@ -40,11 +40,18 @@ func (r *Ring) Recent() []Entry {
 
 // Subscribe 返回日志通道与取消函数；通道满时新日志会被丢弃。
 func (r *Ring) Subscribe() (<-chan Entry, func()) {
+	ch, _, cancel := r.SubscribeWithBacklog()
+	return ch, cancel
+}
+
+// SubscribeWithBacklog 在同一把锁内返回 backlog 并注册订阅，避免重复或空窗。
+func (r *Ring) SubscribeWithBacklog() (<-chan Entry, []Entry, func()) {
 	ch := make(chan Entry, 64)
 	r.mu.Lock()
+	backlog := append([]Entry(nil), r.entries...)
 	r.subs[ch] = struct{}{}
 	r.mu.Unlock()
-	return ch, func() {
+	return ch, backlog, func() {
 		r.mu.Lock()
 		delete(r.subs, ch)
 		close(ch)

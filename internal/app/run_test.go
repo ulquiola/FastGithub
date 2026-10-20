@@ -53,6 +53,7 @@ func TestServePACAndUI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.Lookup("github.com")
 	proxyAddr, uiAddr, cancel, done := startTestServe(t, cfg, store)
 	defer cancel()
 
@@ -142,4 +143,36 @@ func TestServeShutdownClosesActiveConn(t *testing.T) {
 			t.Fatal("shutdown 未关闭已建立的活动连接")
 		}
 	}
+}
+
+func TestServeUIDomains(t *testing.T) {
+	cfg := config.Default()
+	cfg.Domains = map[string]*config.Domain{"github.com": {}}
+	cfg.Log.File = filepath.Join(t.TempDir(), "fastgithub.log")
+	store, err := config.NewStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Lookup("github.com")
+	_, uiAddr, cancel, done := startTestServe(t, cfg, store)
+	defer cancel()
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://" + uiAddr + "/api/domains")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var domains []struct {
+		Pattern string `json:"pattern"`
+		Hits    int64  `json:"hits"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&domains); err != nil {
+		t.Fatal(err)
+	}
+	if len(domains) != 1 || domains[0].Pattern != "github.com" || domains[0].Hits < 1 {
+		t.Fatalf("domains = %+v", domains)
+	}
+	cancel()
+	waitServe(t, done)
 }

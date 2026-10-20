@@ -356,7 +356,7 @@ function FindProxyForURL(url, host){
 | POST | `/api/intercept` | 是 | 开关拦截 |
 | GET | `/flowStatistics` | 否 | 兼容端点，字段 `TotalRead/TotalWrite/ReadRate/WriteRate`（PascalCase）；同时注册在 38457 与 Windows 的 80 上 |
 
-鉴权：变更类接口要求 `X-FastGithub-Token`，令牌启动时随机生成、写入配置目录 `ui.token`（0600），页面由服务端注入。
+鉴权：变更类接口要求 `X-FastGithub-Token`，令牌启动时随机生成、写入 CA 目录同级 `ui.token`（0600），页面由服务端注入。
 
 ### 7.8 服务与打包
 

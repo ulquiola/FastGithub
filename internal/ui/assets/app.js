@@ -14,7 +14,11 @@ async function loadDomains() {
   body.innerHTML = '';
   for (const d of domains) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${d.pattern}</td><td>${d.hits}</td>`;
+    const pattern = document.createElement('td');
+    pattern.textContent = d.pattern;
+    const hits = document.createElement('td');
+    hits.textContent = String(d.hits);
+    tr.append(pattern, hits);
     body.appendChild(tr);
   }
 }

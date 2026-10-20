@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"fastgithub-go/internal/config"
 )
@@ -134,5 +135,43 @@ func TestReverseProxyPreservesEncodedPath(t *testing.T) {
 	rp.ServeHTTP(httptest.NewRecorder(), req)
 	if got.URL.Path != "/a/b/c" || got.URL.EscapedPath() != "/a%2Fb/c" {
 		t.Fatalf("path=%q escaped=%q，编码斜杠应保留", got.URL.Path, got.URL.EscapedPath())
+	}
+}
+
+func TestReverseProxyKeepsNoBody(t *testing.T) {
+	store := testStore(t, map[string]*config.Domain{"example.com": {}})
+	var got *http.Request
+	rp := NewReverseProxy(store, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		got = r
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: http.NoBody}, nil
+	}))
+	req := httptest.NewRequest(http.MethodPost, "https://example.com/x", nil)
+	req.Host = "example.com"
+	rp.ServeHTTP(httptest.NewRecorder(), req)
+	if got.Body != http.NoBody {
+		t.Fatalf("无 body 请求不应被包装，实际 %T", got.Body)
+	}
+}
+
+func TestReverseProxyShortCircuitLogging(t *testing.T) {
+	store := testStore(t, map[string]*config.Domain{
+		"demo.example": {Response: &config.Response{Status: 404, ContentType: "text/plain", Content: "nope"}},
+	})
+	logger := newCaptureLogger()
+	rp := NewReverseProxy(store, roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("短路不应访问上游")
+		return nil, nil
+	}))
+	rp.SetLogger(logger)
+	req := httptest.NewRequest(http.MethodGet, "https://demo.example/", nil)
+	req.Host = "demo.example"
+	rp.ServeHTTP(httptest.NewRecorder(), req)
+	select {
+	case e := <-logger.entries:
+		if e.Status != 404 || e.Write != 4 {
+			t.Fatalf("entry = %+v", e)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("未记录短路日志")
 	}
 }

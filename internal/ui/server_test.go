@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,16 @@ import (
 	"fastgithub-go/internal/config"
 	"fastgithub-go/internal/flow"
 )
+
+func localRequest(method, path string, body ...io.Reader) *http.Request {
+	var reader io.Reader
+	if len(body) > 0 {
+		reader = body[0]
+	}
+	req := httptest.NewRequest(method, path, reader)
+	req.Host = "127.0.0.1"
+	return req
+}
 
 func newTestUI(t *testing.T) (*Server, *certs.Authority, *int) {
 	t.Helper()
@@ -47,7 +58,7 @@ func newTestUI(t *testing.T) (*Server, *certs.Authority, *int) {
 func TestIndexInjectsToken(t *testing.T) {
 	s, _, _ := newTestUI(t)
 	rec := httptest.NewRecorder()
-	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	s.Handler().ServeHTTP(rec, localRequest(http.MethodGet, "/", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -59,7 +70,7 @@ func TestIndexInjectsToken(t *testing.T) {
 func TestStatusAndDomains(t *testing.T) {
 	s, _, _ := newTestUI(t)
 	rec := httptest.NewRecorder()
-	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+	s.Handler().ServeHTTP(rec, localRequest(http.MethodGet, "/api/status", nil))
 	var status map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
 		t.Fatal(err)
@@ -72,7 +83,7 @@ func TestStatusAndDomains(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/domains", nil))
+	s.Handler().ServeHTTP(rec, localRequest(http.MethodGet, "/api/domains", nil))
 	var domains []domainJSON
 	if err := json.Unmarshal(rec.Body.Bytes(), &domains); err != nil {
 		t.Fatal(err)
@@ -85,7 +96,7 @@ func TestStatusAndDomains(t *testing.T) {
 func TestFlowStatistics(t *testing.T) {
 	s, _, _ := newTestUI(t)
 	rec := httptest.NewRecorder()
-	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/flowStatistics", nil))
+	s.Handler().ServeHTTP(rec, localRequest(http.MethodGet, "/flowStatistics", nil))
 	var stats map[string]int64
 	if err := json.Unmarshal(rec.Body.Bytes(), &stats); err != nil {
 		t.Fatal(err)
@@ -99,12 +110,12 @@ func TestInstallCertRequiresToken(t *testing.T) {
 	s, _, installs := newTestUI(t)
 
 	rec := httptest.NewRecorder()
-	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/cert/install", nil))
+	s.Handler().ServeHTTP(rec, localRequest(http.MethodPost, "/api/cert/install", nil))
 	if rec.Code != http.StatusUnauthorized || *installs != 0 {
 		t.Fatalf("status=%d installs=%d", rec.Code, *installs)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/cert/install", nil)
+	req := localRequest(http.MethodPost, "/api/cert/install", nil)
 	req.Header.Set("X-FastGithub-Token", "testtoken")
 	rec = httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
@@ -115,7 +126,7 @@ func TestInstallCertRequiresToken(t *testing.T) {
 
 func TestInterceptNotImplemented(t *testing.T) {
 	s, _, _ := newTestUI(t)
-	req := httptest.NewRequest(http.MethodPost, "/api/intercept", nil)
+	req := localRequest(http.MethodPost, "/api/intercept", nil)
 	req.Header.Set("X-FastGithub-Token", "testtoken")
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
@@ -127,7 +138,7 @@ func TestInterceptNotImplemented(t *testing.T) {
 func TestCertDownload(t *testing.T) {
 	s, _, _ := newTestUI(t)
 	rec := httptest.NewRecorder()
-	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/cert", nil))
+	s.Handler().ServeHTTP(rec, localRequest(http.MethodGet, "/api/cert", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "BEGIN CERTIFICATE") {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -175,7 +186,7 @@ func TestSSEBacklog(t *testing.T) {
 func TestStaticAsset(t *testing.T) {
 	s, _, _ := newTestUI(t)
 	rec := httptest.NewRecorder()
-	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	s.Handler().ServeHTTP(rec, localRequest(http.MethodGet, "/app.js", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "EventSource") {
 		t.Fatalf("status=%d", rec.Code)
 	}
@@ -200,5 +211,68 @@ func TestLoadOrCreateToken(t *testing.T) {
 	again, err := LoadOrCreateToken(path)
 	if err != nil || again != token {
 		t.Fatalf("again=%q err=%v", again, err)
+	}
+}
+
+func TestSSELive(t *testing.T) {
+	cfg := config.Default()
+	store, err := config.NewStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Lookup("github.com")
+	ca, err := certs.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ring := flow.NewRing(10)
+	s := New(Options{Config: cfg, Store: store, Tracker: flow.NewTracker(1), Ring: ring, CA: ca, Token: "testtoken"})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/logs", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	reader := bufio.NewReader(resp.Body)
+	ring.Add(flow.Entry{Time: time.Unix(1000, 0), Domain: "live.example", Method: "GET", Status: 200})
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	var event logEvent
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(strings.TrimSpace(line), "data: ")), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Domain != "live.example" {
+		t.Fatalf("event = %+v", event)
+	}
+}
+
+func TestInstallCertRejectsWrongToken(t *testing.T) {
+	s, _, installs := newTestUI(t)
+	req := localRequest(http.MethodPost, "/api/cert/install")
+	req.Header.Set("X-FastGithub-Token", "wrong")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || *installs != 0 {
+		t.Fatalf("status=%d installs=%d", rec.Code, *installs)
+	}
+}
+
+func TestLoadOrCreateTokenRejectsInvalid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ui.token")
+	if err := os.WriteFile(path, []byte("not-a-token\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadOrCreateToken(path); err == nil {
+		t.Fatal("非法令牌应报错")
 	}
 }

@@ -44,17 +44,21 @@ func (l *Logger) Log(e Entry) {
 	if l.tracker != nil {
 		l.tracker.Add(e.Read, e.Write)
 	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.file != nil {
-		l.mu.Lock()
 		fmt.Fprintf(l.file, "%s %s %s %d %s %d %d\n",
 			e.Time.Format(time.RFC3339), e.Domain, e.Method, e.Status, e.Duration, e.Read, e.Write)
-		l.mu.Unlock()
 	}
 }
 
 func (l *Logger) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.file == nil {
 		return nil
 	}
-	return l.file.Close()
+	err := l.file.Close()
+	l.file = nil
+	return err
 }

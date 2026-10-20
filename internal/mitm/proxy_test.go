@@ -417,7 +417,7 @@ func TestTunnelLogging(t *testing.T) {
 
 	select {
 	case e := <-logger.entries:
-		if e.Method != "CONNECT" || e.Domain != "127.0.0.1" || e.Read < 2 || e.Write < 2 {
+		if e.Method != "CONNECT" || e.Domain != "127.0.0.1" || e.Read != 2 || e.Write != 2 {
 			t.Fatalf("entry = %+v", e)
 		}
 	case <-time.After(2 * time.Second):

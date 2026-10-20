@@ -43,6 +43,8 @@ func Serve(ctx context.Context, cfg *config.Config, store *config.Store, ln net.
 }
 
 func serve(ctx context.Context, cfg *config.Config, store *config.Store, proxyLn, uiLn net.Listener, caDir string, ready func(proxy, ui net.Addr)) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	ca, err := certs.LoadOrCreate(caDir)
 	if err != nil {
 		proxyLn.Close()
@@ -90,10 +92,20 @@ func serve(ctx context.Context, cfg *config.Config, store *config.Store, proxyLn
 
 	var mu sync.Mutex
 	active := map[net.Conn]struct{}{}
+	var wg sync.WaitGroup
 	closing := false
 	stop := make(chan struct{})
 	shutdownDone := make(chan struct{})
 	defer close(stop)
+	defer func() {
+		cancel()
+		mu.Lock()
+		for conn := range active {
+			conn.Close()
+		}
+		mu.Unlock()
+		wg.Wait()
+	}()
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -126,11 +138,13 @@ func serve(ctx context.Context, cfg *config.Config, store *config.Store, proxyLn
 		}
 		active[conn] = struct{}{}
 		mu.Unlock()
+		wg.Add(1)
 		go func(conn net.Conn) {
 			defer func() {
 				mu.Lock()
 				delete(active, conn)
 				mu.Unlock()
+				wg.Done()
 			}()
 			server.ServeConn(ctx, conn)
 		}(conn)
