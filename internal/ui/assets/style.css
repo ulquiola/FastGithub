@@ -81,6 +81,7 @@ body {
 main { max-width: 1180px; margin: 0 auto; padding: 1.4rem 2rem 3rem; display: grid; gap: 1.1rem; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.1rem; }
+.split { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(0, 1.7fr); gap: 1.1rem; align-items: stretch; }
 
 .card {
   background: var(--card);
@@ -157,6 +158,15 @@ tbody tr:hover { background: rgba(15,157,88,0.07); }
 .toast.ok { background: var(--primary); }
 .toast.err { background: var(--danger); }
 @keyframes rise { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+@media (max-width: 1080px) {
+  .logs li { grid-template-columns: 4.6rem minmax(6rem, 1fr) 3.6rem 2.6rem; }
+  .logs .meta { display: none; }
+}
+
+@media (max-width: 900px) {
+  .split { grid-template-columns: 1fr; }
+}
 
 @media (max-width: 720px) {
   .topbar { padding: 1rem 1.2rem; }
