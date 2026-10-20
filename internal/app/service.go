@@ -1,8 +1,10 @@
 package app
 
 import (
+	"encoding/xml"
 	"fmt"
 	"path/filepath"
+	"strings"
 )
 
 const serviceName = "fastgithub"
@@ -63,5 +65,11 @@ func LaunchdPlist(exePath string) string {
   <true/>
 </dict>
 </plist>
-`, launchdLabel, exePath, configPathFor(exePath), dir)
+`, xmlEscape(launchdLabel), xmlEscape(exePath), xmlEscape(configPathFor(exePath)), xmlEscape(dir))
+}
+
+func xmlEscape(s string) string {
+	var b strings.Builder
+	xml.EscapeText(&b, []byte(s))
+	return b.String()
 }

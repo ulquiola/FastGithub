@@ -333,7 +333,7 @@ function FindProxyForURL(url, host){
 
 - **加载**：按 `intercept.driver_dir` → exe 同目录 → `windivert\` → `%PATH%` 找 `WinDivert.dll`，`WinDivert64.sys` 必须同目录；`syscall.NewLazyDLL` 取符号：`WinDivertOpen/Recv/Send/Close/HelperCalcChecksums`。
 - **句柄**：① `udp.DstPort == 53`；② `loopback and (tcp.DstPort == 443 or 80 or 22 or 9418 or tcp.SrcPort == <实际监听端口>)`。
-- **地址结构**：用 64 字节缓冲 + 显式位域读取（MSVC 位域从低位起）；`Layer`/`Outbound`/`Loopback`/`Impostor` 等按 `windivert.h` 偏移定义；启动时 `windivert-selftest` 打印解析结果供人工核对。**这是本设计唯一无法在本机验证的部分**（见 §10）。
+- **地址结构**：用 WinDivert 2.x 的 80 字节 WINDIVERT_ADDRESS（flags 在 offset 8，union 在 16）；`Layer`/`Outbound`/`Loopback`/`Impostor` 等按 `windivert.h` 偏移定义；启动时 `windivert-selftest` 打印解析结果供人工核对。**这是本设计唯一无法在本机验证的部分**（见 §10）。
 - **DNS 应答**：解析 QNAME/QTYPE，命中规则则构造 `A 127.0.0.1` / `AAAA ::1`（TTL 300s），复制 ID 与 question，置 `QR|AA|RD|RA`，交换 IP/端口，置 `Impostor`，重算 IP/UDP 校验和；未命中放行。
 - **TCP 重映射**：仅改源/目标端口与校验和，逻辑等价 `TcpInterceptor.ModifyTcpPacket`。
 - **降级**：非管理员 / DLL 缺失 / `Open` 失败 → 记警告，透明入口不启用，显式代理仍可用；`intercept.mode="off"` 可强制关闭。
@@ -360,7 +360,7 @@ function FindProxyForURL(url, host){
 
 ### 7.8 服务与打包
 
-- `start/stop`：Windows 用 SCM（`CreateService` 指向自身 `run`，失败回滚删除）；Linux 写 `/etc/systemd/system/fastgithub.service`（`Type=simple`、`Restart=always`）；macOS 写 launchd plist。
+- `start/stop`：Windows 用 SCM（`CreateService` 指向自身 `run`；`main` 调用 `StartServiceCtrlDispatcher` 注册控制处理器，失败回滚删除）；Linux 写 `/etc/systemd/system/fastgithub.service`（`Type=simple`、`Restart=always`）；macOS 写 launchd plist。
 - 构建矩阵：`CGO_ENABLED=0` × `{windows,linux,darwin}` × `{amd64,arm64}`，`-ldflags "-s -w -X main.version=..."`。
 - WinDivert 不内嵌：`make fetch-windivert` 下载官方包并校验 SHA-256，放入发布 zip；仓库只保留脚本与校验和。
 - 发布包结构：`fastgithub(.exe)`、`fastgithub.toml`、`conf.d/`、`windivert/`（可选）、`README.md`、`LICENSE`。
@@ -447,7 +447,7 @@ function FindProxyForURL(url, host){
 
 | 风险 | 后果 | 缓解 |
 |---|---|---|
-| WinDivert 地址结构/位域写错 | 透明拦截静默失效 | 64 字节缓冲 + 命名偏移；`windivert-selftest` 打印字段；`Open` 失败即降级；真实收发留手工验收 |
+| WinDivert 地址结构/位域写错 | 透明拦截静默失效 | 80 字节 WINDIVERT_ADDRESS + 命名偏移；`windivert-selftest` 打印字段；`Open` 失败即降级；真实收发留手工验收 |
 | QUIC/HTTP3 绕过 TCP 拦截 | 部分站点加速失效 | 文档明确边界；PAC/显式代理兜底 |
 | ECH 普及后 SNI 不可见 | 无法按域名分流 | 当前未部署；`intercept`/`mitm` 解耦，判据可替换 |
 | 无 SNI 客户端证书不匹配 | 连接失败 | 默认证书 + `Host` 兜底；`tls_sni=true` 强制 |

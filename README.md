@@ -37,13 +37,6 @@ $ fastgithub version
 | M2 | Windows WinDivert 透明拦截 + 服务安装 | 代码完成，待 Windows 手工验收 |
 | M3 | 配置片段转写、兼容端点、行为对齐核对、CI 与发布脚本 | 未开始 |
 
-## 目标平台
-
-Windows / Linux / macOS，`amd64` 与 `arm64`，`CGO_ENABLED=0` 交叉编译。
-
-## 许可证
-
-MIT，保留原项目署名，见 [LICENSE](LICENSE)。
 ## Windows 透明拦截与服务
 
 ```console
@@ -55,3 +48,11 @@ $ fastgithub uninstall            # 卸载服务
 ```
 
 WinDivert 不随包内嵌，需把 `WinDivert.dll` 与 `WinDivert64.sys` 放到 `intercept.driver_dir`、可执行文件同目录或 `windivert/` 下。DLL 缺失、非管理员或 `WinDivertOpen` 失败时只告警，38457 显式代理继续可用。
+
+## 目标平台
+
+Windows / Linux / macOS，`amd64` 与 `arm64`，`CGO_ENABLED=0` 交叉编译。
+
+## 许可证
+
+MIT，保留原项目署名，见 [LICENSE](LICENSE)。

@@ -85,6 +85,9 @@ func acceptLoop(ctx context.Context, ln net.Listener, handle func(context.Contex
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("透明监听 %s 退出: %v", ln.Addr(), err)
+			}
 			return
 		}
 		go handle(ctx, conn)

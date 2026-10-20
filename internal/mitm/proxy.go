@@ -48,7 +48,14 @@ func (s *Server) ServeTLS(ctx context.Context, conn net.Conn) {
 
 // ServeHTTPConn 处理已接受的明文 HTTP 连接（80 入口）。
 func (s *Server) ServeHTTPConn(ctx context.Context, conn net.Conn) {
-	s.serveOneHTTP(conn, s.reverse)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !r.URL.IsAbs() && r.URL.Path == "/flowStatistics" && s.stats != nil {
+			s.stats.ServeHTTP(w, r)
+			return
+		}
+		s.reverse.ServeHTTP(w, r)
+	})
+	s.serveOneHTTP(conn, handler)
 }
 
 // SetStats 设置 /flowStatistics 的处理器。

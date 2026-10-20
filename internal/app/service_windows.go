@@ -5,6 +5,7 @@ package app
 import (
 	"fmt"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -16,12 +17,9 @@ const (
 	serviceAutoStart       = 0x00000002
 	serviceErrorNormal     = 0x00000001
 	serviceControlStop     = 0x00000001
-	serviceStart           = 0x0010
-	serviceStop            = 0x0020
 	serviceQueryStatus     = 0x0004
-	serviceStatusProcess   = 0
 	serviceStopped         = 1
-	serviceRunning         = 4
+	errorServiceExists     = syscall.Errno(1073)
 )
 
 type serviceStatus struct {
@@ -46,8 +44,8 @@ var (
 	procCloseServiceHandle = advapi32.NewProc("CloseServiceHandle")
 )
 
-func openSCManager() (syscall.Handle, error) {
-	handle, _, errno := procOpenSCManager.Call(0, 0, scManagerConnect|scManagerCreateService)
+func openSCManager(access uint32) (syscall.Handle, error) {
+	handle, _, errno := procOpenSCManager.Call(0, 0, uintptr(access))
 	if handle == 0 {
 		return 0, fmt.Errorf("OpenSCManager: %w", errno)
 	}
@@ -67,7 +65,7 @@ func openService(manager syscall.Handle, access uint32) (syscall.Handle, error) 
 }
 
 func InstallService(exePath string) error {
-	manager, err := openSCManager()
+	manager, err := openSCManager(scManagerConnect | scManagerCreateService)
 	if err != nil {
 		return err
 	}
@@ -93,6 +91,9 @@ func InstallService(exePath string) error {
 		0, 0, 0, 0, 0,
 	)
 	if handle == 0 {
+		if errno == errorServiceExists {
+			return fmt.Errorf("服务 %s 已存在", serviceName)
+		}
 		return fmt.Errorf("CreateService 失败（可能需要管理员权限）: %w", errno)
 	}
 	procCloseServiceHandle.Call(handle)
@@ -100,7 +101,7 @@ func InstallService(exePath string) error {
 }
 
 func UninstallService() error {
-	manager, err := openSCManager()
+	manager, err := openSCManager(scManagerConnect)
 	if err != nil {
 		return err
 	}
@@ -120,7 +121,7 @@ func UninstallService() error {
 }
 
 func StartService() error {
-	manager, err := openSCManager()
+	manager, err := openSCManager(scManagerConnect)
 	if err != nil {
 		return err
 	}
@@ -137,7 +138,7 @@ func StartService() error {
 }
 
 func StopService() error {
-	manager, err := openSCManager()
+	manager, err := openSCManager(scManagerConnect)
 	if err != nil {
 		return err
 	}
@@ -161,5 +162,12 @@ func stopService(service syscall.Handle) error {
 	if r, _, errno := procControlService.Call(uintptr(service), serviceControlStop, uintptr(unsafe.Pointer(&status))); r == 0 {
 		return fmt.Errorf("ControlService(STOP) 失败: %w", errno)
 	}
-	return nil
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+		if r, _, _ := procQueryServiceStatus.Call(uintptr(service), uintptr(unsafe.Pointer(&status))); r != 0 && status.CurrentState == serviceStopped {
+			return nil
+		}
+	}
+	return fmt.Errorf("服务停止超时")
 }

@@ -24,3 +24,10 @@ func TestLaunchdPlist(t *testing.T) {
 		t.Fatalf("plist = %s", plist)
 	}
 }
+
+func TestLaunchdPlistEscapesXML(t *testing.T) {
+	plist := LaunchdPlist("/tmp/a&b/fastgithub")
+	if !strings.Contains(plist, "/tmp/a&amp;b/fastgithub") {
+		t.Fatalf("plist = %s", plist)
+	}
+}

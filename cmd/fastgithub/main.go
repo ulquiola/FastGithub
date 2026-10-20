@@ -35,6 +35,10 @@ const usage = `用法: fastgithub <命令>
 var installCert = certs.Install
 
 func main() {
+	// Windows 服务由 SCM 拉起时先注册控制处理器；交互运行时该调用失败并继续。
+	if handled, code := runAsService(); handled {
+		os.Exit(code)
+	}
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
@@ -163,6 +167,12 @@ func runServiceCommand(command string) error {
 }
 
 func runRun(args []string, stdout io.Writer) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runRunWithContext(ctx, args, stdout)
+}
+
+func runRunWithContext(ctx context.Context, args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	path := fs.String("path", "", "配置文件路径")
@@ -188,8 +198,6 @@ func runRun(args []string, stdout io.Writer) error {
 	if err := os.Chdir(filepath.Dir(mainPath)); err != nil {
 		return fmt.Errorf("切换到配置目录失败: %w", err)
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	return app.Run(ctx, cfg, store, func(proxy, ui net.Addr) {
 		fmt.Fprintf(stdout, "代理已启动: %s\nUI: http://%s/\n", proxy, ui)
 	})

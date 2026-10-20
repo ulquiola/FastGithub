@@ -20,6 +20,7 @@ func SelfTestText() string {
 	fmt.Fprintf(&b, "WinDivert 可用: %v\n", Available())
 	fmt.Fprintf(&b, "地址: Layer=%d Outbound=%v Loopback=%v Impostor=%v IfIdx=%d\n",
 		addr.Layer(), addr.Outbound(), addr.Loopback(), addr.Impostor(), addr.NetworkIfIdx())
+	fmt.Fprintf(&b, "原始地址: % x\n", addr[:])
 
 	cfg := config.Default()
 	cfg.Domains = map[string]*config.Domain{"github.com": {}}

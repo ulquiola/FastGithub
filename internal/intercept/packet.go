@@ -7,7 +7,7 @@ import (
 	"net"
 )
 
-// ErrFragment 表示非首片分片，调用方应原样回注。
+// ErrFragment 表示分片包（含 MF=1 的首片），调用方应原样回注。
 var ErrFragment = errors.New("IP 分片")
 
 const (
@@ -55,7 +55,8 @@ func parseIPv4(raw []byte) (*Packet, error) {
 	if total < ihl || total > len(raw) {
 		return nil, fmt.Errorf("IPv4 总长度非法")
 	}
-	if binary.BigEndian.Uint16(raw[6:8])&0x1FFF != 0 {
+	frag := binary.BigEndian.Uint16(raw[6:8])
+	if frag&0x1FFF != 0 || frag&0x2000 != 0 {
 		return nil, ErrFragment
 	}
 	p := &Packet{
@@ -97,7 +98,8 @@ func parseIPv6(raw []byte) (*Packet, error) {
 			if off+8 > total {
 				return nil, fmt.Errorf("IPv6 分片头截断")
 			}
-			if binary.BigEndian.Uint16(raw[off+2:off+4])&0xFFF8 != 0 {
+			// 偏移非 0 或 M=1 的分片一律放行；只放行 atomic fragment（M=0, offset=0）。
+			if binary.BigEndian.Uint16(raw[off+2:off+4])&0xFFF9 != 0 {
 				return nil, ErrFragment
 			}
 			next = raw[off]

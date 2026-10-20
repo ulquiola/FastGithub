@@ -47,6 +47,11 @@ func loadWinDivert(driverDir string) (*winDivert, error) {
 			if _, err := os.Stat(path); err != nil {
 				continue
 			}
+			sysPath := filepath.Join(filepath.Dir(path), "WinDivert64.sys")
+			if _, err := os.Stat(sysPath); err != nil {
+				lastErr = fmt.Errorf("缺少 %s: %w", sysPath, err)
+				continue
+			}
 		}
 		dll, err := syscall.LoadDLL(path)
 		if err != nil {

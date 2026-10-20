@@ -4,7 +4,7 @@
 
 **Goal:** 在 Windows 上用 WinDivert 把命中域名的 DNS A/AAAA 改写为 127.0.0.1/::1，并把 443/80 的环回连接重映射到本地监听器；提供 `windivert-selftest` 与服务安装/启停命令；非 Windows 或失败时降级为显式代理。
 
-**Architecture:** `internal/intercept` 分离纯逻辑（64 字节 `WINDIVERT_ADDRESS` 位域、IPv4/IPv6+UDP/TCP 解析、DNS 查询/应答、校验和）与 Windows 系统调用层（`syscall.NewLazyDLL`，构建标签）；`internal/app` 用端口顺延监听 443/80，Windows 上启动两个 WinDivert 句柄（DNS 与 TCP 重映射），失败只告警并保留 38457。
+**Architecture:** `internal/intercept` 分离纯逻辑（80 字节 `WINDIVERT_ADDRESS` 位域、IPv4/IPv6+UDP/TCP 解析、DNS 查询/应答、校验和）与 Windows 系统调用层（`syscall.NewLazyDLL`，构建标签）；`internal/app` 用端口顺延监听 443/80，Windows 上启动两个 WinDivert 句柄（DNS 与 TCP 重映射），失败只告警并保留 38457。
 
 **Tech Stack:** Go 1.22，仅标准库（`syscall`/`unsafe`/`encoding/binary`/`net`）；Windows 专用文件用 `//go:build windows`；`CGO_ENABLED=0`。
 
@@ -25,7 +25,7 @@
 
 | 文件 | 职责 |
 |---|---|
-| `internal/intercept/address.go` | 64 字节地址位域解析/修改 |
+| `internal/intercept/address.go` | 80 字节地址位域解析/修改 |
 | `internal/intercept/packet.go` | IPv4/IPv6、UDP/TCP 解析、端口改写、校验和 |
 | `internal/intercept/dnsanswer.go` | DNS 查询解析与 A/AAAA 应答 |
 | `internal/intercept/intercept_windows.go` | WinDivert 加载、两个句柄、收发循环 |
@@ -119,7 +119,7 @@ func StopService() error
 func SystemdUnit(exePath string) string   // 纯函数，测试
 func LaunchdPlist(exePath string) string  // 纯函数，测试
 ```
-- Windows：SCM `OpenSCManager`/`CreateService`（指向 `<exe> run`，自动启动，失败删除回滚）/`DeleteService`/`StartService`/`ControlService(STOP)`。
+- Windows：SCM `OpenSCManager`/`CreateService`（指向 `<exe> run --path <config>`，自动启动，失败删除回滚）/`DeleteService`/`StartService`/`ControlService(STOP)`；`main` 通过 `StartServiceCtrlDispatcher` + `RegisterServiceCtrlHandler` 上报 RUNNING/STOPPED，交互运行遇 1063 继续。
 - Linux：写 `/etc/systemd/system/fastgithub.service`，`systemctl daemon-reload` + `enable --now` / `disable --now`。
 - macOS：写 `/Library/LaunchDaemons/com.fastgithub.fastgithub.plist`，`launchctl load/unload`。
 - CLI：`install`、`uninstall`、`start`、`stop`、`windivert-selftest`；非 Windows 上 `windivert-selftest` 打印不支持。
