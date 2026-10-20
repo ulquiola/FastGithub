@@ -189,15 +189,18 @@ func TestResolverSingleflight(t *testing.T) {
 	})
 	r := newTestResolver([]string{srv.URL}, nil)
 	var wg sync.WaitGroup
+	start := make(chan struct{})
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			<-start
 			if _, err := r.Lookup(context.Background(), "example.com"); err != nil {
 				t.Errorf("Lookup: %v", err)
 			}
 		}()
 	}
+	close(start)
 	wg.Wait()
 	if got := atomic.LoadInt32(count); got != 2 {
 		t.Fatalf("请求数 = %d，期望 2（A+AAAA 各一次）", got)
@@ -242,5 +245,77 @@ func TestNegativeTTL(t *testing.T) {
 	opErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("refused")}
 	if got := negativeTTL(opErr); got != socketNegativeTTL {
 		t.Fatalf("socket 错误 TTL = %v", got)
+	}
+}
+
+func TestResolverCallerTimeoutDoesNotPoisonCache(t *testing.T) {
+	srv, count := startDoH(t, func(dnsQuestion) ([]string, uint32, int) {
+		time.Sleep(200 * time.Millisecond)
+		return []string{"1.2.3.4"}, 60, 0
+	})
+	r := newTestResolver([]string{srv.URL}, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := r.Lookup(ctx, "example.com"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v，期望调用方超时", err)
+	}
+	if elapsed := time.Since(start); elapsed > 150*time.Millisecond {
+		t.Fatalf("调用方超时未及时返回: %v", elapsed)
+	}
+
+	// 共享查询继续完成并写入正缓存，不应留下 10 分钟负缓存。
+	time.Sleep(300 * time.Millisecond)
+	ips, err := r.Lookup(context.Background(), "example.com")
+	if err != nil || len(ips) != 1 {
+		t.Fatalf("ips=%v err=%v", ips, err)
+	}
+	if got := atomic.LoadInt32(count); got != 2 {
+		t.Fatalf("请求数 = %d，期望 2", got)
+	}
+}
+
+func TestResolverDoHHealthCooldown(t *testing.T) {
+	bad, badCount := startDoH(t, func(dnsQuestion) ([]string, uint32, int) {
+		return nil, 0, 2 // SERVFAIL
+	})
+	good, _ := startDoH(t, func(q dnsQuestion) ([]string, uint32, int) {
+		if q.Type == typeA {
+			return []string{"1.2.3.4"}, 60, 0
+		}
+		return []string{"2001:db8::1"}, 60, 0
+	})
+	r := newTestResolver([]string{bad.URL, good.URL}, nil)
+	if _, err := r.Lookup(context.Background(), "one.example"); err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(badCount); got != 2 {
+		t.Fatalf("首次应尝试坏端点，请求数 = %d", got)
+	}
+	if _, err := r.Lookup(context.Background(), "two.example"); err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(badCount); got != 2 {
+		t.Fatalf("冷却期内不应再尝试坏端点，请求数 = %d", got)
+	}
+}
+
+func TestResolverOverallTimeout(t *testing.T) {
+	srv, _ := startDoH(t, func(dnsQuestion) ([]string, uint32, int) {
+		time.Sleep(time.Second)
+		return []string{"1.2.3.4"}, 60, 0
+	})
+	r := New(config.DNS{
+		DoH:     []string{srv.URL, srv.URL},
+		Timeout: config.Duration(100 * time.Millisecond),
+	})
+	stubRacer(r)
+	start := time.Now()
+	if _, err := r.Lookup(context.Background(), "example.com"); err == nil {
+		t.Fatal("应超时")
+	}
+	if elapsed := time.Since(start); elapsed > 700*time.Millisecond {
+		t.Fatalf("耗时 %v，dns.timeout 应作为总预算", elapsed)
 	}
 }

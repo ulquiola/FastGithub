@@ -17,6 +17,8 @@ type racer struct {
 	now     func() time.Time
 }
 
+const maxRaceCandidates = 32
+
 func (r *racer) Sort(ctx context.Context, ips []net.IP) []net.IP {
 	now := r.now()
 	type probe struct {
@@ -25,9 +27,15 @@ func (r *racer) Sort(ctx context.Context, ips []net.IP) []net.IP {
 		latency time.Duration
 		ok      bool
 	}
-	probes := make([]probe, len(ips))
+	probeCount := len(ips)
+	if probeCount > maxRaceCandidates {
+		probeCount = maxRaceCandidates
+	}
+	tail := ips[probeCount:]
+	probes := make([]probe, probeCount)
 	var wg sync.WaitGroup
-	for i, ip := range ips {
+	for i := 0; i < probeCount; i++ {
+		ip := ips[i]
 		probes[i] = probe{idx: i, ip: ip}
 		if latency, ok, found := r.latency.get(ip.String(), now); found {
 			probes[i].latency, probes[i].ok = latency, ok
@@ -41,7 +49,12 @@ func (r *racer) Sort(ctx context.Context, ips []net.IP) []net.IP {
 			conn, err := r.dial(attemptCtx, "tcp", net.JoinHostPort(p.ip.String(), r.port))
 			cancel()
 			if err != nil {
-				r.latency.put(p.ip.String(), 0, false, now)
+				if conn != nil {
+					conn.Close()
+				}
+				if ctx.Err() == nil {
+					r.latency.put(p.ip.String(), 0, false, now)
+				}
 				return
 			}
 			conn.Close()
@@ -74,9 +87,10 @@ func (r *racer) Sort(ctx context.Context, ips []net.IP) []net.IP {
 		}
 		return probes[i].idx < probes[j].idx
 	})
-	out := make([]net.IP, len(ips))
-	for i, p := range probes {
-		out[i] = p.ip
+	out := make([]net.IP, 0, len(ips))
+	for _, p := range probes {
+		out = append(out, p.ip)
 	}
+	out = append(out, tail...)
 	return out
 }

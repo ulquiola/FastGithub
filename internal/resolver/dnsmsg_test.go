@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"bytes"
+	"encoding/binary"
 	"net"
 	"strings"
 	"testing"
@@ -101,5 +102,57 @@ func TestAddressesCNAMELoop(t *testing.T) {
 	}
 	if ips, _ := m.addresses("a.example", typeA); len(ips) != 0 {
 		t.Fatalf("CNAME 环不应返回地址: %v", ips)
+	}
+}
+
+func TestAddressesUsesCNAMETTL(t *testing.T) {
+	resp := buildTestResponse(t, 1, "example.com", typeA, []testRecord{
+		{name: "example.com", typ: typeCNAME, ttl: 5, target: "cdn.example.net"},
+		{name: "cdn.example.net", typ: typeA, ttl: 600, ip: net.ParseIP("1.2.3.4")},
+	}, 0)
+	m, err := parseMessage(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ips, ttl := m.addresses("example.com", typeA)
+	if len(ips) != 1 || ttl != 5 {
+		t.Fatalf("ips=%v ttl=%d，CNAME TTL 应约束整条链", ips, ttl)
+	}
+}
+
+func TestParseRejectsHeaderPointer(t *testing.T) {
+	msg := make([]byte, 14)
+	msg[5] = 1
+	msg[12], msg[13] = 0xC0, 0x00
+	if _, err := parseMessage(msg); err == nil {
+		t.Fatal("指向报文头的压缩指针应报错")
+	}
+}
+
+func TestParseRejectsForwardPointer(t *testing.T) {
+	msg := make([]byte, 20)
+	msg[5] = 1
+	msg[12], msg[13] = 0xC0, 0x14 // 指向 20
+	if _, err := parseMessage(msg); err == nil {
+		t.Fatal("前向压缩指针应报错")
+	}
+}
+
+func TestParseRejectsBadARdlength(t *testing.T) {
+	resp := buildTestResponse(t, 1, "a.com", typeA, []testRecord{
+		{name: "a.com", typ: typeA, ttl: 60, ip: net.ParseIP("1.2.3.4")},
+	}, 0)
+	labels, err := splitName("a.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	qlen := 1
+	for _, label := range labels {
+		qlen += 1 + len(label)
+	}
+	rdlenOff := 12 + qlen + 4 + 2 + 2 + 2 + 4
+	binary.BigEndian.PutUint16(resp[rdlenOff:], 3)
+	if _, err := parseMessage(resp); err == nil {
+		t.Fatal("A 记录 rdlength 非法应报错")
 	}
 }

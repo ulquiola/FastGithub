@@ -1,6 +1,8 @@
 package resolver
 
 import (
+	"context"
+	"errors"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -15,7 +17,7 @@ func TestFlightDedup(t *testing.T) {
 	release := make(chan struct{})
 	var once sync.Once
 
-	fn := func() ([]net.IP, error) {
+	fn := func(context.Context) ([]net.IP, error) {
 		atomic.AddInt32(&calls, 1)
 		once.Do(func() { close(started) })
 		<-release
@@ -28,7 +30,7 @@ func TestFlightDedup(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ips, err := g.Do("k", fn)
+			ips, err := g.Do(context.Background(), "k", fn)
 			if err != nil {
 				results <- err
 				return
@@ -55,7 +57,7 @@ func TestFlightErrorShared(t *testing.T) {
 	g := newFlightGroup()
 	var calls int32
 	boom := errShortResult
-	fn := func() ([]net.IP, error) {
+	fn := func(context.Context) ([]net.IP, error) {
 		atomic.AddInt32(&calls, 1)
 		time.Sleep(20 * time.Millisecond)
 		return nil, boom
@@ -65,7 +67,7 @@ func TestFlightErrorShared(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := g.Do("k", fn); err != boom {
+			if _, err := g.Do(context.Background(), "k", fn); err != boom {
 				t.Errorf("err = %v，期望共享同一错误", err)
 			}
 		}()
@@ -73,5 +75,26 @@ func TestFlightErrorShared(t *testing.T) {
 	wg.Wait()
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Fatalf("fn 调用 %d 次，期望 1", got)
+	}
+}
+
+func TestFlightCallerCancellation(t *testing.T) {
+	g := newFlightGroup()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	fn := func(context.Context) ([]net.IP, error) {
+		close(started)
+		<-release
+		return []net.IP{net.ParseIP("1.1.1.1")}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	go func() {
+		<-started
+		time.Sleep(50 * time.Millisecond)
+		close(release)
+	}()
+	if _, err := g.Do(ctx, "k", fn); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v，期望调用方超时", err)
 	}
 }

@@ -9,6 +9,7 @@ import (
 const (
 	latencyTTL        = 5 * time.Minute
 	failureLatencyTTL = time.Minute
+	dohCooldown       = 30 * time.Second
 )
 
 type ipCacheEntry struct {
@@ -103,6 +104,43 @@ func (c *latencyCache) put(ip string, latency time.Duration, ok bool, now time.T
 		c.entries = map[string]latencyEntry{}
 	}
 	c.entries[ip] = latencyEntry{latency: latency, ok: ok, expires: now.Add(ttl)}
+}
+
+// sourceHealth 记录失败过的 DoH 端点，冷却期内优先尝试其他端点。
+type sourceHealth struct {
+	mu       sync.Mutex
+	cooldown time.Duration
+	down     map[string]time.Time
+}
+
+func newSourceHealth(cooldown time.Duration) *sourceHealth {
+	return &sourceHealth{cooldown: cooldown, down: map[string]time.Time{}}
+}
+
+func (h *sourceHealth) available(key string, now time.Time) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	until, ok := h.down[key]
+	if !ok {
+		return true
+	}
+	if !now.Before(until) {
+		delete(h.down, key)
+		return true
+	}
+	return false
+}
+
+func (h *sourceHealth) fail(key string, now time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.down[key] = now.Add(h.cooldown)
+}
+
+func (h *sourceHealth) ok(key string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.down, key)
 }
 
 func copyIPs(ips []net.IP) []net.IP {

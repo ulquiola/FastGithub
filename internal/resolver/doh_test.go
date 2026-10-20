@@ -23,8 +23,13 @@ func TestDoHQuery(t *testing.T) {
 		if err != nil {
 			t.Errorf("read body: %v", err)
 		}
+		resp := responseForQuery(body, []string{"1.2.3.4"}, 60, 0)
+		if resp == nil {
+			http.Error(w, "build", http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/dns-message")
-		w.Write(makeResponseForQuery(t, body, []string{"1.2.3.4"}, 60, 0))
+		w.Write(resp)
 	}))
 	defer srv.Close()
 
@@ -56,7 +61,7 @@ func TestDoHNon200(t *testing.T) {
 
 func TestQueryTCP(t *testing.T) {
 	addr := startTCPDNS(t, func(query []byte) []byte {
-		return makeResponseForQuery(t, query, []string{"1.2.3.4"}, 60, 0)
+		return responseForQuery(query, []string{"1.2.3.4"}, 60, 0)
 	})
 	msg, id, err := buildQueryWithID("example.com", typeA, 0x2222)
 	if err != nil {
@@ -104,7 +109,12 @@ func TestParseAnswerErrors(t *testing.T) {
 		t.Fatalf("空答案 err = %v", err)
 	}
 	wrongName := buildTestResponse(t, id, "other.com", typeA, nil, 0)
-	if _, _, err := parseAnswer(wrongName, id, "example.com", typeA); err == nil || !strings.Contains(err.Error(), "问题名") {
+	if _, _, err := parseAnswer(wrongName, id, "example.com", typeA); err == nil || !strings.Contains(err.Error(), "问题不匹配") {
 		t.Fatalf("问题名不匹配 err = %v", err)
+	}
+	truncated := append([]byte(nil), good...)
+	truncated[2] |= 0x02 // TC
+	if _, _, err := parseAnswer(truncated, id, "example.com", typeA); err == nil || !strings.Contains(err.Error(), "截断") {
+		t.Fatalf("TC 响应 err = %v", err)
 	}
 }

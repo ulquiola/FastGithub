@@ -13,8 +13,9 @@
 ## Global Constraints
 
 - 模块路径 `fastgithub-go`，`go.mod` 声明 `go 1.22`，**不出现任何 `require`**。
-- 查询链顺序：`dns.doh` 配置顺序 → `dns.fallback` 配置顺序（只用 TCP）。
-- TTL：正缓存夹逼 `30s ~ 10min`；负缓存非 socket 错误 30s、socket 错误 10min。
+- 查询链顺序：`dns.doh` 配置顺序 → `dns.fallback` 配置顺序（只用 TCP）；DoH 传输/响应失败后冷却 30s。
+- 超时：`dns.timeout` 是整次解析的总预算（A/AAAA 并发共享）；调用方取消与共享查询解耦，且不写负缓存。
+- TTL：正缓存夹逼 `30s ~ 10min`，CNAME 链取整链最小 TTL；负缓存非 socket 错误 30s、`*net.OpError` 10min。
 - 竞速：每个 IP 并发 TCP 拨号 `443`，单次上限 2s；全部失败时保持原序。
 - 面向用户的错误信息用中文；错误需可 `errors.Is/As` 判断（`net.Error` 用于 socket 分类）。
 - 每个任务结束时 `go test ./...` 全绿、`go vet ./...` 无输出、`gofmt -l .` 无输出。

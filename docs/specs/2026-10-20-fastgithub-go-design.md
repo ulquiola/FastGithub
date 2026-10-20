@@ -269,7 +269,8 @@ content      = "这是一个用于示范配置的域名"
 
 ### 7.1 resolver
 
-- 查询链：DoH（配置顺序，逐个健康检查）→ 明文 DNS（仅 TCP 可达者）。DoH 用 `net/http` 手写 `application/dns-message` 请求，不引入 DNS 库。
+- 查询链：DoH（配置顺序，传输/响应失败的端点冷却 30s 后重试）→ 明文 DNS（仅 TCP 可达者）。DoH 用 `net/http` 手写 `application/dns-message` 请求，不引入 DNS 库。
+- 超时：`dns.timeout` 是整次解析的总预算（A/AAAA 并发共享），单个源在该预算内尝试；调用方取消不会写入负缓存。
 - 报文：自实现 DNS 编解码（question/answer、A/AAAA、压缩指针只读不写），约 300 行。
 - 缓存：`domain→[]IP`（TTL 夹逼 30s~10min）、`IP→latency`（正常 5min / 故障 1min）。并发同键请求用 `singleflight`（自实现，约 40 行）。
 - 竞速：对候选 IP 并发 TCP 拨号（2s 上限），最快者置首位；全部失败则按原序返回。
@@ -378,8 +379,8 @@ function FindProxyForURL(url, host){
 | `GlobalListener.cs` | `internal/app/ports.go` | 从偏好端口向上找空闲；TCP/UDP 都判 | `ports_test.go` |
 | `DnsClient.cs` | `internal/resolver/*` | TTL 夹逼、负缓存时长、A/AAAA、并发去重 | `resolve_test.go` |
 | `DnscryptProxy.cs` | 删除（内置 DoH） | 不再拉起外部进程 | `doh_test.go` |
-| `IPAddressService.cs` | `internal/resolver/race.go` | 竞速排序、5s 探测、故障 1min | `race_test.go` |
-| `DomainResolver.cs` | `internal/resolver/service.go` | 组装、缓存键 | `service_test.go` |
+| `IPAddressService.cs` | `internal/resolver/race.go` | 竞速排序、2s 探测、故障 1min | `race_test.go` |
+| `DomainResolver.cs` | `internal/resolver/resolve.go` | 组装、缓存键 | `resolve_test.go` |
 | `HttpClientHandler.cs` | `internal/dialer/dialer.go` | IP 顺序、SNI、证书判定、10s 超时 | `dialer_test.go` |
 | `LifetimeHttpHandler*.cs` | `internal/dialer/pool.go` | 连接复用与失效清理 | `pool_test.go` |
 | `KestrelServerExtensions.cs` | `internal/app/listeners.go` | 端口、TLS 条件、日志文案 | `listeners_test.go` |

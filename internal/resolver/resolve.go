@@ -31,6 +31,7 @@ type Resolver struct {
 	cache    *ipCache
 	latency  *latencyCache
 	group    *flightGroup
+	health   *sourceHealth
 	racer    *racer
 	now      func() time.Time
 }
@@ -48,6 +49,7 @@ func New(cfg config.DNS) *Resolver {
 		cache:    newIPCache(4096),
 		latency:  newLatencyCache(4096),
 		group:    newFlightGroup(),
+		health:   newSourceHealth(dohCooldown),
 		now:      time.Now,
 	}
 	r.racer = &racer{
@@ -69,19 +71,26 @@ func (r *Resolver) Lookup(ctx context.Context, domain string) ([]net.IP, error) 
 	if ips, err, ok := r.cache.get(domain, r.now()); ok {
 		return ips, err
 	}
-	ips, err := r.group.Do(domain, func() ([]net.IP, error) {
+	ips, err := r.group.Do(ctx, domain, func(sharedCtx context.Context) ([]net.IP, error) {
 		if ips, err, ok := r.cache.get(domain, r.now()); ok {
 			return ips, err
 		}
-		return r.resolve(ctx, domain)
+		return r.resolve(sharedCtx, domain)
 	})
 	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return copyIPs(ips), nil
 }
 
 func (r *Resolver) resolve(ctx context.Context, domain string) ([]net.IP, error) {
+	// dns.timeout 是整次解析的总预算，避免源越多耗时线性增长。
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+
 	type answer struct {
 		ips []net.IP
 		ttl uint32
@@ -116,6 +125,10 @@ func (r *Resolver) resolve(ctx context.Context, domain string) ([]net.IP, error)
 		if err == nil {
 			err = fmt.Errorf("%s 没有 A/AAAA 记录", domain)
 		}
+		// 调用方取消或总预算耗尽时不写负缓存，避免把一次超时放大成持续故障。
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, errors.Join(err, ctxErr)
+		}
 		r.cache.putNegative(domain, err, negativeTTL(err), r.now())
 		return nil, err
 	}
@@ -130,22 +143,28 @@ func (r *Resolver) lookupType(ctx context.Context, domain string, qtype uint16) 
 		return nil, 0, err
 	}
 	var errs []error
-	for _, endpoint := range r.doh.endpoints {
+	now := r.now()
+	for _, endpoint := range r.healthyEndpoints(now) {
 		attemptCtx, cancel := context.WithTimeout(ctx, r.timeout)
 		resp, err := r.doh.query(attemptCtx, endpoint, msg)
 		cancel()
 		if err != nil {
+			r.health.fail(endpoint, now)
 			errs = append(errs, fmt.Errorf("DoH %s: %w", endpoint, err))
 			continue
 		}
 		ips, ttl, err := parseAnswer(resp, id, domain, qtype)
 		if err != nil {
+			if !errors.Is(err, errNXDOMAIN) {
+				r.health.fail(endpoint, now)
+			}
 			errs = append(errs, fmt.Errorf("DoH %s: %w", endpoint, err))
 			if errors.Is(err, errNXDOMAIN) {
 				return nil, 0, err
 			}
 			continue
 		}
+		r.health.ok(endpoint)
 		return ips, ttl, nil
 	}
 	for _, server := range r.fallback {
@@ -172,6 +191,23 @@ func (r *Resolver) lookupType(ctx context.Context, domain string, qtype uint16) 
 	return nil, 0, errors.Join(errs...)
 }
 
+// healthyEndpoints 跳过冷却中的端点；全部冷却时仍尝试一轮，避免彻底不可用。
+func (r *Resolver) healthyEndpoints(now time.Time) []string {
+	if len(r.doh.endpoints) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(r.doh.endpoints))
+	for _, endpoint := range r.doh.endpoints {
+		if r.health.available(endpoint, now) {
+			out = append(out, endpoint)
+		}
+	}
+	if len(out) == 0 {
+		return r.doh.endpoints
+	}
+	return out
+}
+
 func normalizeDomain(domain string) string {
 	return strings.ToLower(strings.TrimRight(domain, "."))
 }
@@ -188,8 +224,9 @@ func clampTTL(ttl uint32) time.Duration {
 }
 
 func negativeTTL(err error) time.Duration {
-	var ne net.Error
-	if errors.As(err, &ne) {
+	// 只把真正的拨号/网络错误视为 socket 错误；HTTP、RCODE、context 错误按短 TTL 处理。
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
 		return socketNegativeTTL
 	}
 	return nonSocketNegativeTTL
@@ -211,6 +248,9 @@ func dedupIPs(ips []net.IP) []net.IP {
 
 // queryTCP 按 2 字节长度前缀收发 DNS 报文。
 func queryTCP(ctx context.Context, server string, msg []byte) ([]byte, error) {
+	if len(msg) > 65535 {
+		return nil, fmt.Errorf("DNS 查询过长")
+	}
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "tcp", server)
 	if err != nil {
@@ -251,8 +291,15 @@ func parseAnswer(data []byte, id uint16, domain string, qtype uint16) ([]net.IP,
 	if m.Flags&0x8000 == 0 {
 		return nil, 0, fmt.Errorf("DNS 响应缺少 QR 位")
 	}
-	if len(m.Questions) > 0 && !strings.EqualFold(strings.TrimSuffix(m.Questions[0].Name, "."), domain) {
-		return nil, 0, fmt.Errorf("DNS 响应问题名不匹配")
+	if m.Flags&0x0200 != 0 {
+		return nil, 0, fmt.Errorf("DNS 响应被截断")
+	}
+	if len(m.Questions) != 1 {
+		return nil, 0, fmt.Errorf("DNS 响应问题数异常")
+	}
+	q := m.Questions[0]
+	if !strings.EqualFold(strings.TrimSuffix(q.Name, "."), domain) || q.Type != qtype || q.Class != classIN {
+		return nil, 0, fmt.Errorf("DNS 响应问题不匹配")
 	}
 	switch m.rcode() {
 	case 0:

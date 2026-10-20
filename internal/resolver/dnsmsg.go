@@ -20,8 +20,9 @@ const (
 var errNXDOMAIN = errors.New("域名不存在 (NXDOMAIN)")
 
 type dnsQuestion struct {
-	Name string
-	Type uint16
+	Name  string
+	Type  uint16
+	Class uint16
 }
 
 type dnsRecord struct {
@@ -115,8 +116,9 @@ func parseMessage(data []byte) (*dnsMessage, error) {
 			return nil, fmt.Errorf("DNS 问题段截断")
 		}
 		m.Questions = append(m.Questions, dnsQuestion{
-			Name: name,
-			Type: binary.BigEndian.Uint16(data[next:]),
+			Name:  name,
+			Type:  binary.BigEndian.Uint16(data[next:]),
+			Class: binary.BigEndian.Uint16(data[next+2:]),
 		})
 		off = next + 4
 	}
@@ -141,13 +143,15 @@ func parseMessage(data []byte) (*dnsMessage, error) {
 		}
 		switch rec.Type {
 		case typeA:
-			if rdlen == 4 {
-				rec.IP = net.IPv4(data[rdata], data[rdata+1], data[rdata+2], data[rdata+3]).To4()
+			if rdlen != 4 {
+				return nil, fmt.Errorf("A 记录长度异常: %d", rdlen)
 			}
+			rec.IP = net.IPv4(data[rdata], data[rdata+1], data[rdata+2], data[rdata+3]).To4()
 		case typeAAAA:
-			if rdlen == 16 {
-				rec.IP = append(net.IP(nil), data[rdata:rdata+16]...)
+			if rdlen != 16 {
+				return nil, fmt.Errorf("AAAA 记录长度异常: %d", rdlen)
 			}
+			rec.IP = append(net.IP(nil), data[rdata:rdata+16]...)
 		case typeCNAME:
 			target, _, err := decodeName(data, rdata)
 			if err != nil {
@@ -167,6 +171,7 @@ func decodeName(msg []byte, off int) (string, int, error) {
 	pos := off
 	next := -1
 	jumps := 0
+	nameLen := 1 // 根标签
 	for {
 		if pos >= len(msg) {
 			return "", 0, fmt.Errorf("DNS 名字越界")
@@ -187,7 +192,14 @@ func decodeName(msg []byte, off int) (string, int, error) {
 			if jumps > 128 {
 				return "", 0, fmt.Errorf("DNS 压缩指针过多")
 			}
-			pos = int(msg[pos]&0x3F)<<8 | int(msg[pos+1])
+			ptr := int(msg[pos]&0x3F)<<8 | int(msg[pos+1])
+			if ptr < 12 {
+				return "", 0, fmt.Errorf("DNS 压缩指针指向报文头")
+			}
+			if ptr >= pos {
+				return "", 0, fmt.Errorf("DNS 压缩指针必须向前引用")
+			}
+			pos = ptr
 			continue
 		}
 		if length&0xC0 != 0 {
@@ -199,6 +211,10 @@ func decodeName(msg []byte, off int) (string, int, error) {
 		}
 		if len(labels) >= 128 {
 			return "", 0, fmt.Errorf("DNS 标签过多")
+		}
+		nameLen += 1 + length
+		if nameLen > 255 {
+			return "", 0, fmt.Errorf("DNS 名字过长")
 		}
 		labels = append(labels, string(msg[pos:pos+length]))
 		pos += length
@@ -232,6 +248,10 @@ func (m *dnsMessage) addresses(qname string, qtype uint16) ([]net.IP, uint32) {
 					ttl, ttlSet = rec.TTL, true
 				}
 			case rec.Type == typeCNAME && rec.Target != "":
+				// CNAME 自身的 TTL 同样约束整条链。
+				if !ttlSet || rec.TTL < ttl {
+					ttl, ttlSet = rec.TTL, true
+				}
 				next = strings.ToLower(strings.TrimSuffix(rec.Target, "."))
 			}
 		}
