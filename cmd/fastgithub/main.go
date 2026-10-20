@@ -145,7 +145,7 @@ func runRun(args []string, stdout io.Writer) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return app.Run(ctx, cfg, store, func(addr net.Addr) {
-		fmt.Fprintf(stdout, "代理已启动: %s\n", addr)
+	return app.Run(ctx, cfg, store, func(proxy, ui net.Addr) {
+		fmt.Fprintf(stdout, "代理已启动: %s\nUI: http://%s/\n", proxy, ui)
 	})
 }
