@@ -1,0 +1,13 @@
+body { font-family: system-ui, sans-serif; margin: 0; background: #f5f6f8; color: #1f2328; }
+header { display: flex; align-items: baseline; gap: 1rem; padding: 1rem 2rem; background: #24292f; color: #fff; }
+header h1 { font-size: 1.2rem; margin: 0; }
+main { padding: 1rem 2rem; display: grid; gap: 1.5rem; }
+.cards { display: flex; gap: 1rem; flex-wrap: wrap; }
+.card { background: #fff; border-radius: 8px; padding: 1rem; min-width: 14rem; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.card h2 { font-size: .9rem; margin: 0 0 .5rem; color: #57606a; }
+table { width: 100%; border-collapse: collapse; background: #fff; }
+th, td { text-align: left; padding: .5rem; border-bottom: 1px solid #eaeef2; }
+ul#logs { list-style: none; padding: 0; background: #fff; border-radius: 8px; max-height: 20rem; overflow: auto; }
+ul#logs li { padding: .4rem .8rem; border-bottom: 1px solid #eaeef2; font-family: ui-monospace, monospace; font-size: .85rem; }
+button { margin-right: .5rem; padding: .4rem .8rem; border: 0; border-radius: 6px; background: #1f883d; color: #fff; cursor: pointer; }
+button#intercept { background: #57606a; }

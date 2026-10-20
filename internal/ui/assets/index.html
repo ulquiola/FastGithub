@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="fastgithub-token" content="{{TOKEN}}">
+  <title>FastGithub</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>FastGithub</h1>
+    <span id="version"></span>
+  </header>
+  <main>
+    <section class="cards">
+      <div class="card"><h2>流量</h2><p id="flow">-</p></div>
+      <div class="card"><h2>状态</h2><p id="status">-</p></div>
+      <div class="card">
+        <h2>操作</h2>
+        <button id="install-cert">安装 CA</button>
+        <button id="intercept">切换拦截</button>
+      </div>
+    </section>
+    <section>
+      <h2>域名规则</h2>
+      <table>
+        <thead><tr><th>规则</th><th>命中</th></tr></thead>
+        <tbody id="domains"></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>请求日志</h2>
+      <ul id="logs"></ul>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,204 @@
+package ui
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"fastgithub-go/internal/certs"
+	"fastgithub-go/internal/config"
+	"fastgithub-go/internal/flow"
+)
+
+func newTestUI(t *testing.T) (*Server, *certs.Authority, *int) {
+	t.Helper()
+	cfg := config.Default()
+	cfg.Domains = map[string]*config.Domain{"github.com": {}}
+	store, err := config.NewStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Lookup("github.com")
+	ca, err := certs.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker := flow.NewTracker(60)
+	tracker.Add(10, 20)
+	tracker.Tick()
+	ring := flow.NewRing(10)
+	ring.Add(flow.Entry{Time: time.Unix(1000, 0), Domain: "github.com", Method: "GET", Status: 200, Read: 1, Write: 2})
+	installs := 0
+	s := New(Options{
+		Config: cfg, Store: store, Tracker: tracker, Ring: ring, CA: ca,
+		Token: "testtoken", Version: "test",
+		InstallCert: func(string) error { installs++; return nil },
+	})
+	return s, ca, &installs
+}
+
+func TestIndexInjectsToken(t *testing.T) {
+	s, _, _ := newTestUI(t)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "testtoken") {
+		t.Fatal("页面未注入令牌")
+	}
+}
+
+func TestStatusAndDomains(t *testing.T) {
+	s, _, _ := newTestUI(t)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+	var status map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status["version"] != "test" || status["proxyPort"].(float64) != 38457 {
+		t.Fatalf("status = %v", status)
+	}
+	if status["caFingerprint"] == "" {
+		t.Fatal("缺少 CA 指纹")
+	}
+
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/domains", nil))
+	var domains []domainJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &domains); err != nil {
+		t.Fatal(err)
+	}
+	if len(domains) != 1 || domains[0].Pattern != "github.com" || domains[0].Hits != 1 {
+		t.Fatalf("domains = %+v", domains)
+	}
+}
+
+func TestFlowStatistics(t *testing.T) {
+	s, _, _ := newTestUI(t)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/flowStatistics", nil))
+	var stats map[string]int64
+	if err := json.Unmarshal(rec.Body.Bytes(), &stats); err != nil {
+		t.Fatal(err)
+	}
+	if stats["TotalRead"] != 10 || stats["TotalWrite"] != 20 {
+		t.Fatalf("stats = %v", stats)
+	}
+}
+
+func TestInstallCertRequiresToken(t *testing.T) {
+	s, _, installs := newTestUI(t)
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/cert/install", nil))
+	if rec.Code != http.StatusUnauthorized || *installs != 0 {
+		t.Fatalf("status=%d installs=%d", rec.Code, *installs)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/cert/install", nil)
+	req.Header.Set("X-FastGithub-Token", "testtoken")
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || *installs != 1 {
+		t.Fatalf("status=%d installs=%d body=%s", rec.Code, *installs, rec.Body.String())
+	}
+}
+
+func TestInterceptNotImplemented(t *testing.T) {
+	s, _, _ := newTestUI(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/intercept", nil)
+	req.Header.Set("X-FastGithub-Token", "testtoken")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d", rec.Code)
+	}
+}
+
+func TestCertDownload(t *testing.T) {
+	s, _, _ := newTestUI(t)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/cert", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "BEGIN CERTIFICATE") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Header().Get("Content-Disposition"), "fastgithub.crt") {
+		t.Fatal("缺少下载文件名")
+	}
+}
+
+func TestSSEBacklog(t *testing.T) {
+	s, _, _ := newTestUI(t)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/logs", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+	reader := bufio.NewReader(resp.Body)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(line, "data: ") {
+		t.Fatalf("line = %q", line)
+	}
+	var event logEvent
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(strings.TrimSpace(line), "data: ")), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Domain != "github.com" || event.Method != "GET" {
+		t.Fatalf("event = %+v", event)
+	}
+}
+
+func TestStaticAsset(t *testing.T) {
+	s, _, _ := newTestUI(t)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "EventSource") {
+		t.Fatalf("status=%d", rec.Code)
+	}
+}
+
+func TestLoadOrCreateToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ui.token")
+	token, err := LoadOrCreateToken(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(token) != 32 {
+		t.Fatalf("token = %q", token)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("权限 = %v", info.Mode().Perm())
+	}
+	again, err := LoadOrCreateToken(path)
+	if err != nil || again != token {
+		t.Fatalf("again=%q err=%v", again, err)
+	}
+}
