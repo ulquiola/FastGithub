@@ -23,6 +23,17 @@ func TestShippedConfig(t *testing.T) {
 	if d.TLSSNI {
 		t.Fatal("github.com 不应发送 SNI")
 	}
+	if d.TLSIgnoreNameMismatch {
+		t.Fatal("github.com 不应忽略证书名不匹配：精确规则必须优先于 *.github.com")
+	}
+
+	d, ok = st.Lookup("api.github.com")
+	if !ok {
+		t.Fatal("api.github.com 未命中")
+	}
+	if d.TLSIgnoreNameMismatch {
+		t.Fatalf("api.github.com 应命中精确规则而非 *.github.com，got=%+v", d)
+	}
 
 	d, ok = st.Lookup("raw.githubusercontent.com")
 	if !ok || !d.TLSIgnoreNameMismatch {

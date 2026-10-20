@@ -42,6 +42,7 @@ tls_sni = false
 
 [domains."*.githubusercontent.com"]
 tls_ignore_name_mismatch = true
+timeout = "2s"
 `))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -57,6 +58,13 @@ tls_ignore_name_mismatch = true
 	}
 	if len(c.Domains) != 2 || c.Domains["github.com"].TLSSNI {
 		t.Fatalf("domains = %+v", c.Domains)
+	}
+	got := c.Domains["*.githubusercontent.com"]
+	if got == nil || !got.TLSIgnoreNameMismatch {
+		t.Fatalf("*.githubusercontent.com = %+v，tls_ignore_name_mismatch 应为 true", got)
+	}
+	if got.Timeout.Std() != 2*time.Second {
+		t.Fatalf("*.githubusercontent.com timeout = %v，期望 2s", got.Timeout.Std())
 	}
 }
 
@@ -83,5 +91,81 @@ func TestValidateErrors(t *testing.T) {
 func TestValidateOK(t *testing.T) {
 	if err := Default().Validate(); err != nil {
 		t.Fatalf("默认配置应通过校验: %v", err)
+	}
+}
+
+func TestValidateRejectsCaseInsensitiveDuplicateDomains(t *testing.T) {
+	c := Default()
+	c.Domains = map[string]*Domain{
+		"GitHub.com": {TLSSNI: true},
+		"github.com": {TLSSNI: false},
+	}
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("大小写不同但等价的域名规则应被拒绝")
+	}
+	for _, want := range []string{"GitHub.com", "github.com", "重复"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v，期望包含 %q", err, want)
+		}
+	}
+}
+
+func TestValidateBranches(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{
+			name:   "nil_domain",
+			mutate: func(c *Config) { c.Domains = map[string]*Domain{"nil.com": nil} },
+			want:   `域名规则 "nil.com" 的配置为空`,
+		},
+		{
+			name:   "bad_ip",
+			mutate: func(c *Config) { c.Domains = map[string]*Domain{"bad.com": {IP: "999.999.999.999"}} },
+			want:   "ip 无法解析",
+		},
+		{
+			name:   "bad_destination",
+			mutate: func(c *Config) { c.Domains = map[string]*Domain{"bad.com": {Destination: "://bad"}} },
+			want:   "destination 无法解析",
+		},
+		{
+			name:   "response_status",
+			mutate: func(c *Config) { c.Domains = map[string]*Domain{"bad.com": {Response: &Response{Status: 600}}} },
+			want:   "response.status",
+		},
+		{
+			name: "response_content_without_type",
+			mutate: func(c *Config) {
+				c.Domains = map[string]*Domain{"bad.com": {Response: &Response{Status: 200, Content: "x"}}}
+			},
+			want: "response.content_type",
+		},
+		{
+			name:   "transparent_duplicate_port",
+			mutate: func(c *Config) { c.Server.Transparent.HTTP = c.Server.Transparent.HTTPS },
+			want:   "server.transparent.http",
+		},
+		{
+			name:   "dns_timeout_non_positive",
+			mutate: func(c *Config) { c.DNS.Timeout = 0 },
+			want:   "dns.timeout",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Default()
+			tc.mutate(c)
+			err := c.Validate()
+			if err == nil {
+				t.Fatal("期望校验失败")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v，期望包含 %q", err, tc.want)
+			}
+		})
 	}
 }

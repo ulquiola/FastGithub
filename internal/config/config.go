@@ -179,6 +179,20 @@ func (c *Config) Validate() error {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	seenRules := make(map[string]string, len(c.Domains))
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		// NewPattern 会统一小写，大小写不同的等价表达式在 Compare 下相等，
+		// 初始顺序又取决于 map 迭代，匹配优先级不确定，因此直接拒绝。
+		lower := strings.ToLower(name)
+		if first, ok := seenRules[lower]; ok {
+			add("域名规则 %q 与 %q 忽略大小写后重复", first, name)
+			continue
+		}
+		seenRules[lower] = name
+	}
 	for _, name := range names {
 		d := c.Domains[name]
 		if name == "" {
