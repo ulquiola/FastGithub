@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"fastgithub-go/internal/app"
+	"fastgithub-go/internal/certs"
 	"fastgithub-go/internal/config"
 )
 
@@ -14,8 +15,12 @@ const usage = `用法: fastgithub <命令>
 
 命令:
   config validate [--path 文件]        校验配置
+  install-cert [--dir 目录]            生成 CA 并加入系统信任库（需管理员/root）
   version                              打印版本信息
 `
+
+// installCert 可在测试中替换，避免真正修改系统信任库。
+var installCert = certs.Install
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -34,6 +39,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "config":
 		if err := runConfig(args[1:], stdout); err != nil {
+			fmt.Fprintln(stderr, "错误: "+err.Error())
+			return 1
+		}
+		return 0
+	case "install-cert":
+		if err := runInstallCert(args[1:], stdout); err != nil {
 			fmt.Fprintln(stderr, "错误: "+err.Error())
 			return 1
 		}
@@ -74,5 +85,27 @@ func runConfig(args []string, stdout io.Writer) error {
 	}
 	fmt.Fprintf(stdout, "配置有效: %d 条域名规则，代理端口 %d，UI 端口 %d\n",
 		len(store.Patterns()), cfg.Server.ProxyPort, cfg.Server.UIPort)
+	return nil
+}
+
+func runInstallCert(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("install-cert", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	dir := fs.String("dir", certs.DefaultDir, "CA 证书目录")
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("参数错误: %w", err)
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("用法: fastgithub install-cert [--dir 目录]")
+	}
+	a, err := certs.LoadOrCreate(*dir)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "CA 证书: %s\n", a.CertPath())
+	if err := installCert(a.CertPath()); err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, "已加入系统信任库")
 	return nil
 }

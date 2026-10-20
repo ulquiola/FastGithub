@@ -259,7 +259,7 @@ content      = "这是一个用于示范配置的域名"
 
 ### 6.4 解析器
 
-自研 TOML 子集，只支持：`[table]`、`[table."quoted.key"]`、`key = value`（字符串、整数、布尔、字符串数组、内联表不支持）、`#` 注释、基本转义。**未知键报错**而非忽略，配合 `config validate` 把拼写错误挡在启动前。
+自研 TOML 子集，只支持：`[table]`、`[table."quoted.key"]`、`key = value`（字符串、整数、布尔、字符串数组、内联表不支持）、`#` 注释、基本转义。**未知键报错**而非忽略，配合 `config validate` 把拼写错误挡在启动前。同一文件内重复表头（如两次 `[a]`）会合并到同一张表，解析器不报错；这是 `conf.d` 片段逐文件解析的宽松行为。
 
 随包片段：`conf.d/10-github.toml`、`20-google.toml`、`30-microsoft.toml`、`40-packages.toml`、`50-misc.toml`，逐条转写原版 9 份 `appsettings.*.json`，不新增策略。
 

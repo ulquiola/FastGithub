@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,5 +83,40 @@ func TestConfigValidateInvalid(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "proxy_port") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestRunInstallCert(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cacert")
+	var installed string
+	old := installCert
+	installCert = func(path string) error {
+		installed = path
+		return nil
+	}
+	defer func() { installCert = old }()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"install-cert", "--dir", dir}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	if installed == "" || !strings.Contains(installed, "fastgithub.crt") {
+		t.Fatalf("installed = %q", installed)
+	}
+	if !strings.Contains(stdout.String(), "已加入系统信任库") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestRunInstallCertFailure(t *testing.T) {
+	old := installCert
+	installCert = func(string) error { return errors.New("denied") }
+	defer func() { installCert = old }()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"install-cert", "--dir", filepath.Join(t.TempDir(), "cacert")}, &stdout, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "denied") {
+		t.Fatalf("exit = %d, stderr = %q", code, stderr.String())
 	}
 }
