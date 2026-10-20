@@ -22,7 +22,7 @@ CA 证书: cacert/fastgithub.crt
 $ fastgithub version
 ```
 
-`install-cert` 会在 `cacert/` 生成 CA（已存在则复用），并把证书加入系统信任库；Windows 需要管理员权限，Linux/macOS 需要 root/sudo。
+`install-cert` 会在 `cacert/` 生成 CA（已存在则复用），并把证书加入系统信任库；Windows 需要管理员权限，Linux/macOS 需要 root/sudo。Windows 下路径分隔符显示为 `\`。
 
 实现按里程碑推进：
 

@@ -2,6 +2,8 @@ package certs
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -72,5 +74,27 @@ func TestInstallPropagatesErrors(t *testing.T) {
 	}
 	if err := install("/tmp/ca.crt", "linux", func(string, ...string) error { return nil }, func(string, string) error { return boom }); !errors.Is(err, boom) {
 		t.Fatalf("err = %v，期望包装 boom", err)
+	}
+}
+
+func TestCopyFile(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.crt")
+	dst := filepath.Join(dir, "sub", "dst.crt")
+	if err := os.WriteFile(src, []byte("cert"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyFile(src, dst); err != nil {
+		t.Fatalf("copyFile: %v", err)
+	}
+	data, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "cert" {
+		t.Fatalf("dst = %q", data)
+	}
+	if err := copyFile(filepath.Join(dir, "missing"), dst); err == nil {
+		t.Fatal("源文件不存在应报错")
 	}
 }

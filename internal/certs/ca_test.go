@@ -114,3 +114,88 @@ func TestLoadOrCreatePartialState(t *testing.T) {
 		t.Fatal("只有证书没有私钥时应报错")
 	}
 }
+
+func TestLoadOrCreateTightensPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 的 chmod 语义不同")
+	}
+	dir := filepath.Join(t.TempDir(), "cacert")
+	a, err := LoadOrCreate(dir)
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+	if err := os.Chmod(a.KeyPath(), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadOrCreate(dir); err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+	keyInfo, err := os.Stat(a.KeyPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keyInfo.Mode().Perm() != 0600 {
+		t.Fatalf("私钥权限 = %v，期望收紧到 0600", keyInfo.Mode().Perm())
+	}
+	dirInfo, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirInfo.Mode().Perm() != 0700 {
+		t.Fatalf("目录权限 = %v，期望收紧到 0700", dirInfo.Mode().Perm())
+	}
+}
+
+func TestLoadOrCreateNormalizesDER(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cacert")
+	a, err := LoadOrCreate(dir)
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+	if err := os.Remove(a.CertPath()); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(dir, "fastgithub.cer")
+	if err := os.WriteFile(legacy, a.Certificate().Raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadOrCreate(dir)
+	if err != nil {
+		t.Fatalf("DER 旧证书应可加载: %v", err)
+	}
+	if filepath.Base(loaded.CertPath()) != "fastgithub.crt" {
+		t.Fatalf("CertPath = %s，期望规范化为 fastgithub.crt", loaded.CertPath())
+	}
+	data, err := os.ReadFile(loaded.CertPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isPEMCertificate(data) {
+		t.Fatal("规范化后的证书应为 PEM")
+	}
+	if loaded.Certificate().SerialNumber.Cmp(a.Certificate().SerialNumber) != 0 {
+		t.Fatal("序列号不一致")
+	}
+}
+
+func TestLoadOrCreateRejectsMismatchedKey(t *testing.T) {
+	dirA := filepath.Join(t.TempDir(), "a")
+	dirB := filepath.Join(t.TempDir(), "b")
+	a, err := LoadOrCreate(dirA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := LoadOrCreate(dirB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(a.CertPath(), b.CertPEM(), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadOrCreate(dirA); err == nil {
+		t.Fatal("证书与私钥不匹配时应报错")
+	}
+}

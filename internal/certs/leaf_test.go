@@ -2,8 +2,10 @@ package certs
 
 import (
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -160,7 +162,7 @@ func TestHostnameInSAN(t *testing.T) {
 		t.Fatal(err)
 	}
 	host, err := os.Hostname()
-	if err != nil || host == "" || host == "example.com" {
+	if err != nil || !validHostname(host) || host == "example.com" {
 		t.Skip("本机无可用主机名")
 	}
 	found := false
@@ -191,5 +193,53 @@ func TestLoadOrCreateRejectsNonCA(t *testing.T) {
 	}
 	if _, err := LoadOrCreate(dir); err == nil {
 		t.Fatal("非 CA 证书应被拒绝")
+	}
+}
+
+func TestLeafCacheBounded(t *testing.T) {
+	a, err := LoadOrCreate(filepath.Join(t.TempDir(), "cacert"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for i := 0; i < maxLeafCache; i++ {
+		a.leafs[fmt.Sprintf("host-%d.example", i)] = &tls.Certificate{
+			Leaf: &x509.Certificate{NotAfter: now.Add(365 * 24 * time.Hour)},
+		}
+	}
+	if _, err := a.LeafFor("new.example"); err != nil {
+		t.Fatalf("LeafFor: %v", err)
+	}
+	if n := len(a.leafs); n > maxLeafCache {
+		t.Fatalf("缓存条目数 = %d，超过上限 %d", n, maxLeafCache)
+	}
+}
+
+func TestLeafForNormalizesDomain(t *testing.T) {
+	a, err := LoadOrCreate(filepath.Join(t.TempDir(), "cacert"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := a.LeafFor("github.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := a.LeafFor("GitHub.COM.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatal("大小写与尾点应复用同一证书")
+	}
+}
+
+func TestLeafForRejectsExpiredCA(t *testing.T) {
+	a, err := LoadOrCreate(filepath.Join(t.TempDir(), "cacert"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.now = func() time.Time { return a.Certificate().NotAfter }
+	if _, err := a.LeafFor("github.com"); err == nil {
+		t.Fatal("CA 过期后应拒绝签发")
 	}
 }

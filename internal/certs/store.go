@@ -22,6 +22,10 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		tmp.Close()
 		return fmt.Errorf("写入 %s 失败: %w", path, err)
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("同步 %s 失败: %w", path, err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("关闭 %s 失败: %w", path, err)
 	}
@@ -53,8 +57,14 @@ func parsePrivateKey(data []byte) (*rsa.PrivateKey, error) {
 	return key, nil
 }
 
+func isPEMCertificate(data []byte) bool {
+	block, _ := pem.Decode(data)
+	return block != nil && block.Type == "CERTIFICATE"
+}
+
 func parseCertificate(data []byte) (*x509.Certificate, error) {
-	if block, _ := pem.Decode(data); block != nil && block.Type == "CERTIFICATE" {
+	if isPEMCertificate(data) {
+		block, _ := pem.Decode(data)
 		data = block.Bytes
 	}
 	return x509.ParseCertificate(data)

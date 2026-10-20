@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -21,6 +22,7 @@ const (
 
 // LeafFor 返回 domain 对应的叶子证书，命中缓存时直接复用。
 func (a *Authority) LeafFor(domain string) (*tls.Certificate, error) {
+	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
 	if domain == "" {
 		return nil, fmt.Errorf("域名不能为空")
 	}
@@ -36,12 +38,18 @@ func (a *Authority) LeafFor(domain string) (*tls.Certificate, error) {
 	}
 	if len(a.leafs) >= maxLeafCache {
 		a.sweepLocked(now)
+		if len(a.leafs) >= maxLeafCache {
+			a.leafs = map[string]*tls.Certificate{}
+		}
 	}
 	a.leafs[domain] = c
 	return c, nil
 }
 
 func (a *Authority) newLeaf(domain string, now time.Time) (*tls.Certificate, error) {
+	if !now.Before(a.cert.NotAfter.Add(-leafRenewBefore)) {
+		return nil, fmt.Errorf("CA 证书 %s 即将过期（%s），请删除后重新生成", a.certPath, a.cert.NotAfter.Format(time.RFC3339))
+	}
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, fmt.Errorf("生成 %s 的私钥失败: %w", domain, err)
@@ -87,7 +95,7 @@ func addSAN(t *x509.Certificate, domain string) {
 	} else {
 		t.DNSNames = append(t.DNSNames, domain)
 	}
-	if host, err := os.Hostname(); err == nil && host != "" && host != domain {
+	if host, err := os.Hostname(); err == nil && validHostname(host) && host != domain {
 		t.DNSNames = append(t.DNSNames, host)
 	}
 	for _, raw := range []string{"127.0.0.1", "::1"} {
@@ -96,6 +104,22 @@ func addSAN(t *x509.Certificate, domain string) {
 			t.IPAddresses = append(t.IPAddresses, ip)
 		}
 	}
+}
+
+// validHostname 只接受 IA5 字符，避免非 ASCII 主机名让证书签发失败。
+func validHostname(host string) bool {
+	if host == "" {
+		return false
+	}
+	for i := 0; i < len(host); i++ {
+		c := host[i]
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9', c == '-', c == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func containsIP(ips []net.IP, want net.IP) bool {

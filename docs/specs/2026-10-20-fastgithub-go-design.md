@@ -479,7 +479,7 @@ fastgithub-go/
 │   ├── config/       toml.go schema.go pattern.go sni.go store.go validate.go
 │   ├── resolver/     dnsmsg.go doh.go resolve.go race.go cache.go singleflight.go
 │   ├── dialer/       dialer.go tlsverify.go pool.go
-│   ├── certs/        ca.go leaf.go trust_windows.go trust_linux.go trust_darwin.go
+│   ├── certs/        ca.go leaf.go store.go trust.go
 │   ├── mitm/         proxy.go connect.go tunnel.go reverse.go pac.go sniff.go
 │   ├── intercept/    intercept.go windivert_windows.go address.go dnsanswer.go packet.go
 │   ├── flow/         flow.go
