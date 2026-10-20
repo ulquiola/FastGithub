@@ -94,6 +94,13 @@ func TestCopyFile(t *testing.T) {
 	if string(data) != "cert" {
 		t.Fatalf("dst = %q", data)
 	}
+	info, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0644 {
+		t.Fatalf("目标权限 = %v，期望 0644", info.Mode().Perm())
+	}
 	if err := copyFile(filepath.Join(dir, "missing"), dst); err == nil {
 		t.Fatal("源文件不存在应报错")
 	}

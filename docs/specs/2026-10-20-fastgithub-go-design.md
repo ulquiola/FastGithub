@@ -388,8 +388,8 @@ function FindProxyForURL(url, host){
 | `TunnelMiddleware.cs` | `internal/mitm/tunnel.go` | 双向复制、目标选择 | `tunnel_test.go` |
 | `HttpReverseProxyMiddleware.cs` | `internal/mitm/reverse.go` | `Host`、`Destination`、`Response` | `reverse_test.go` |
 | `HttpProxyPacMiddleware.cs` | `internal/mitm/pac.go` | 文本逐字一致 | `pac_test.go` |
-| `CertGenerator.cs` / `CertService.cs` | `internal/certs/*` | 扩展项、SAN、有效期、缓存 | `ca_test.go` |
-| `CaCertInstallerOf*.cs` | `internal/certs/trust_*.go` | 三个平台命令 | 手工验收 |
+| `CertGenerator.cs` / `CertService.cs` | `internal/certs/ca.go`、`leaf.go` | 扩展项、SAN、有效期、缓存 | `ca_test.go`、`leaf_test.go` |
+| `CaCertInstallerOf*.cs` | `internal/certs/trust.go` | 三个平台命令 | `trust_test.go` + 手工验收 |
 | `TcpInterceptor.cs` / `DnsInterceptor.cs` | `internal/intercept/*` | 端口改写、DNS 应答、校验和 | 纯函数测试 + 手工 |
 | `FlowAnalyzer.cs` | `internal/flow/flow.go` | 计数与速率 | `flow_test.go` |
 | `FastGithub.UI` | `internal/ui/*` | 流量图、日志、证书、流量统计 | `ui_test.go` |

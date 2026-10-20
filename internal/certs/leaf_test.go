@@ -210,8 +210,11 @@ func TestLeafCacheBounded(t *testing.T) {
 	if _, err := a.LeafFor("new.example"); err != nil {
 		t.Fatalf("LeafFor: %v", err)
 	}
-	if n := len(a.leafs); n > maxLeafCache {
-		t.Fatalf("缓存条目数 = %d，超过上限 %d", n, maxLeafCache)
+	if n := len(a.leafs); n != 1 {
+		t.Fatalf("缓存条目数 = %d，期望重置后为 1", n)
+	}
+	if a.leafs["new.example"] == nil {
+		t.Fatal("重置后应缓存刚签发的证书")
 	}
 }
 

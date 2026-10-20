@@ -22,7 +22,7 @@ const (
 
 // LeafFor 返回 domain 对应的叶子证书，命中缓存时直接复用。
 func (a *Authority) LeafFor(domain string) (*tls.Certificate, error) {
-	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
+	domain = strings.ToLower(strings.TrimRight(domain, "."))
 	if domain == "" {
 		return nil, fmt.Errorf("域名不能为空")
 	}
@@ -48,7 +48,8 @@ func (a *Authority) LeafFor(domain string) (*tls.Certificate, error) {
 
 func (a *Authority) newLeaf(domain string, now time.Time) (*tls.Certificate, error) {
 	if !now.Before(a.cert.NotAfter.Add(-leafRenewBefore)) {
-		return nil, fmt.Errorf("CA 证书 %s 即将过期（%s），请删除后重新生成", a.certPath, a.cert.NotAfter.Format(time.RFC3339))
+		return nil, fmt.Errorf("CA 证书 %s 即将过期（%s），请删除 %s 目录后重新生成",
+			a.certPath, a.cert.NotAfter.Format(time.RFC3339), a.dir)
 	}
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
