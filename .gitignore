@@ -1,0 +1,23 @@
+# 构建产物
+/fastgithub
+/fastgithub.exe
+/dist/
+/publish/
+
+# 本地缓存（沙箱下默认 GOCACHE 不可写，测试与构建统一指向仓库内）
+/.gocache/
+
+# 运行期生成物
+/logs/
+/cacert/
+/fastgithub.toml.local
+/ui.token
+/fastgithub.lock
+
+# WinDivert 由 `make fetch-windivert` 获取，不入库
+/windivert/
+
+# 编辑器
+/.idea/
+/.vscode/
+*.swp
