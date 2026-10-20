@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -144,6 +145,7 @@ func runRun(args []string, stdout io.Writer) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	fmt.Fprintf(stdout, "代理已启动: 127.0.0.1:%d\n", cfg.Server.ProxyPort)
-	return app.Run(ctx, cfg, store)
+	return app.Run(ctx, cfg, store, func(addr net.Addr) {
+		fmt.Fprintf(stdout, "代理已启动: %s\n", addr)
+	})
 }

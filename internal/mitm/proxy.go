@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"fastgithub-go/internal/certs"
@@ -36,13 +37,16 @@ func NewServer(store *config.Store, d *dialer.Dialer, ca *certs.Authority, rever
 
 // ServeConn 根据连接首字节分派 CONNECT、透明 TLS 或普通 HTTP。
 func (s *Server) ServeConn(ctx context.Context, conn net.Conn) {
-	br := bufio.NewReader(conn)
-	peek, err := br.Peek(1)
-	if err != nil {
+	// 首字节读取有超时，避免慢速连接长期占用 goroutine。
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	br := bufio.NewReaderSize(conn, maxConnectHeader+1)
+	peek, err := br.Peek(2)
+	if err != nil && len(peek) == 0 {
 		conn.Close()
 		return
 	}
 	if IsTLS(peek) {
+		conn.SetReadDeadline(time.Time{})
 		s.serveTransparentTLS(ctx, &bufferedConn{Conn: conn, r: br})
 		return
 	}
@@ -50,6 +54,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) {
 		s.serveConnect(ctx, conn, br)
 		return
 	}
+	conn.SetReadDeadline(time.Time{})
 	s.serveOneHTTP(&bufferedConn{Conn: conn, r: br}, s)
 }
 
@@ -83,13 +88,15 @@ func (s *Server) serveConnect(ctx context.Context, conn net.Conn, br *bufio.Read
 		conn.Close()
 		return
 	}
+	conn.SetReadDeadline(time.Time{})
 	domain, matched := s.store.Lookup(host)
+	client := &bufferedConn{Conn: conn, r: br}
 	if matched {
 		if err := WriteConnectEstablished(conn); err != nil {
 			conn.Close()
 			return
 		}
-		s.serveMITM(ctx, conn, host)
+		s.serveMITM(ctx, client, host)
 		return
 	}
 	upstream, err := s.dialer.DialTCP(ctx, dialer.Target{Host: host, Port: port, Domain: domain})
@@ -103,7 +110,7 @@ func (s *Server) serveConnect(ctx context.Context, conn net.Conn, br *bufio.Read
 		conn.Close()
 		return
 	}
-	Tunnel(ctx, conn, upstream, s.idle)
+	Tunnel(ctx, client, upstream, s.idle)
 }
 
 func (s *Server) serveMITM(ctx context.Context, conn net.Conn, connectHost string) {
@@ -117,7 +124,9 @@ func (s *Server) serveMITM(ctx context.Context, conn net.Conn, connectHost strin
 		},
 		MinVersion: tls.VersionTLS12,
 	})
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
+	handshakeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
 		conn.Close()
 		return
 	}
@@ -134,18 +143,31 @@ func (s *Server) serveTransparentTLS(ctx context.Context, conn net.Conn) {
 		},
 		MinVersion: tls.VersionTLS12,
 	})
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
+	handshakeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
 		conn.Close()
 		return
 	}
 	s.serveOneHTTP(tlsConn, s.reverse)
 }
 
-// serveOneHTTP 把连接交给一次性 http.Server；连接的生命周期由 Server 管理。
+// serveOneHTTP 把连接交给一次性 http.Server，并等待连接真正关闭后再返回，
+// 这样上层注册表能在正确的生命周期内跟踪连接。连接保持原始类型，
+// 否则 http.Server 无法识别 *tls.Conn、r.TLS 会为空。
 func (s *Server) serveOneHTTP(conn net.Conn, handler http.Handler) {
+	done := make(chan struct{})
+	var once sync.Once
 	srv := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       5 * time.Minute,
+		ConnState: func(_ net.Conn, state http.ConnState) {
+			if state == http.StateClosed || state == http.StateHijacked {
+				once.Do(func() { close(done) })
+			}
+		},
 	}
-	srv.Serve(&singleConnListener{conn: conn})
+	go srv.Serve(&singleConnListener{conn: conn})
+	<-done
 }

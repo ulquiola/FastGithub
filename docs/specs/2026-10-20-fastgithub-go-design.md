@@ -171,7 +171,7 @@ cmd/fastgithub ──► internal/app
 | D2 | 平台差异只存在于 `intercept` 与 3 个 `trust_*` 文件，用构建标签隔离 | 其余代码保持平台无关，测试面最大化 |
 | D3 | UI 独立端口 38470 | 38457 的普通 GET 必须返回 PAC（兼容原版），不能同时承载 UI |
 | D4 | 不做全局 `git sslverify=false` | 原版这行对全网关闭证书校验；改为 `git config --global http.<url>.sslCAInfo <CA 路径>` 定点生效 |
-| D5 | 证书校验不用 `InsecureSkipVerify` 裸奔 | 用 `VerifyPeerCertificate` 复刻原版 SAN 判定，保持"容忍不匹配"只对配置过的域名生效 |
+| D5 | 证书校验不用 `InsecureSkipVerify` 裸奔 | 用 `VerifyConnection` 复刻原版 SAN 判定，保持"容忍不匹配"只对配置过的域名生效 |
 | D6 | WinDivert 通过 `syscall` 调用，不引入 cgo | 保持 `CGO_ENABLED=0`，交叉编译无需 mingw |
 
 ### 5.6 错误处理与降级
@@ -292,11 +292,12 @@ func (d *Dialer) DialTLS(ctx context.Context, t Target) (*tls.Conn, error)
 - IP 顺序：`conf.IP` 优先 → resolver 结果（竞速排序）。
 - SNI：`conf.SNIPattern()` 展开 `@domain`/`@ipaddress`/`@random`，结果为空则不发 SNI。
   - 注意：当 SNI 值为 IP 字面量时，Go 与 .NET 都**不会**在 ClientHello 中发送 SNI（RFC 6066 禁止）。因此 `@ipaddress` 的实际效果等于不发 SNI，该等价性写入测试用例。
-- 证书校验：`InsecureSkipVerify=true` + 自定义 `VerifyPeerCertificate`：
+- 证书校验：`InsecureSkipVerify=true` + 自定义 `VerifyConnection`（同时覆盖 TLS 1.3 会话恢复）：
   - 链验证（系统根 + 可选本机 CA 池）；
   - 名称校验：手写 SAN 匹配 `dnsName == domain || (dnsName[0]=='*' && strings.HasSuffix(domain, dnsName[1:]))`，**不复用** `VerifyHostname`（其 IP SAN 与通配规则和原版不同）；
   - `tls_ignore_name_mismatch=true` 时跳过名称校验，链校验仍执行。
-- 超时：建连 10s、TLS 握手 10s（对齐原版）；连接建立后受请求上下文控制。
+- 超时：建连 10s、TLS 握手 10s（对齐原版，域名 `timeout` 可覆盖）；连接建立后受请求上下文控制。
+- 无域名规则时（如 `Destination` 改写后的镜像主机）默认发送真实主机名作 SNI。
 
 ### 7.3 certs
 
@@ -311,10 +312,10 @@ func (d *Dialer) DialTLS(ctx context.Context, t Target) (*tls.Conn, error)
 
 ### 7.4 mitm
 
-- **CONNECT**：`bufio.Reader` 读到 `\r\n\r\n` 为止（上限 8KB），解析 `CONNECT host:port`；回 `HTTP/1.1 200 Connection Established\r\n\r\n`。
-- **MITM**：`tls.Server(conn, cfg)`，`GetCertificate` 按 SNI 取叶子证书；握手后把该连接交给一次性 `http.Server`（`singleConnListener`）处理，handler 为反向代理。
-- **隧道**：不匹配域名则 `dialer.DialTCP` 后双向 `io.CopyBuffer`（32KB 池化），带空闲超时。
-- **反向代理**：`httputil.ReverseProxy` + 自定义 `Transport`（`DialContext` 走 `dialer`），`Rewrite` 保留原始 `Host`；`Destination` 改写用 `url.Parse` + 路径拼接，语义等价 `new Uri(baseUri, destination)`。
+- **CONNECT**：`bufio.Reader` 读到 `\r\n\r\n` 为止（上限 8KB，按行有界读取），解析 `CONNECT host:port`；回 `HTTP/1.1 200 Connection Established\r\n\r\n`。首字节与 CONNECT 解析共 10s 读超时，预读字节用 `bufferedConn` 保留。
+- **MITM**：`tls.Server(conn, cfg)`，`GetCertificate` 按 SNI 取叶子证书；握手 10s 超时；握手后把该连接交给一次性 `http.Server`（`singleConnListener`，`IdleTimeout=5min`）处理，handler 为反向代理。
+- **隧道**：不匹配域名则 `dialer.DialTCP` 后双向复制（32KB 池化），读/写都有 5min 空闲超时。
+- **反向代理**：手写反向代理（语义等价 `httputil.ReverseProxy`）+ 自定义 `Transport`（`DialContext`/`DialTLSContext` 走 `dialer`），保留原始 `Host` 与 `%2F` 等路径编码；`Destination` 改写用 `url.Parse` + 路径拼接，语义等价 `new Uri(baseUri, destination)`。
 - **PAC**：文本与原版同构，`PROXY` 值取请求头里的 `Host`（缺省 `127.0.0.1:38457`），规则逐条 `shExpMatch`：
 
 ```
@@ -452,7 +453,7 @@ function FindProxyForURL(url, host){
 | 无 SNI 客户端证书不匹配 | 连接失败 | 默认证书 + `Host` 兜底；`tls_sni=true` 强制 |
 | 自研 TOML 边界 bug | 配置读错 | 子集最小化、未知键报错、`config validate`、golden 测试 |
 | CA 私钥明文 | 本机提权面 | 0600/0700、文档警示、不改全局 git 校验 |
-| Go 与 .NET 证书校验差异 | 行为偏差 | 自定义 `VerifyPeerCertificate`、手写 SAN 匹配、对照测试 |
+| Go 与 .NET 证书校验差异 | 行为偏差 | 自定义 `VerifyConnection`、手写 SAN 匹配、对照测试 |
 | 大文件吞吐不如 Kestrel | clone 体验差 | 32KB 池化缓冲、关闭 `TCP_NODELAY` 批量发送、基准测试 |
 | WinDivert LGPL 与驱动签名 | 分发受阻 | 不内嵌、校验官方 SHA-256、随包附许可证 |
 

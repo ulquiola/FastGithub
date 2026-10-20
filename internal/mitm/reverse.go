@@ -4,6 +4,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"fastgithub-go/internal/config"
@@ -55,7 +56,17 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	out := r.Clone(r.Context())
 	u := *prefix
 	u.Path = joinPath(prefix.Path, r.URL.Path)
-	u.RawPath = ""
+	// 保留 %2F 等编码，避免上游把路径分隔符语义改掉。
+	if raw := joinPath(prefix.EscapedPath(), r.URL.EscapedPath()); raw != u.Path {
+		// RawPath 只有在能解码回 Path 时才有效，否则 Go 会静默忽略它。
+		if decoded, err := url.PathUnescape(raw); err == nil && decoded == u.Path {
+			u.RawPath = raw
+		} else {
+			u.RawPath = ""
+		}
+	} else {
+		u.RawPath = ""
+	}
 	u.RawQuery = r.URL.RawQuery
 	out.URL = &u
 	out.RequestURI = ""

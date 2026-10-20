@@ -4,7 +4,7 @@
 
 **Goal:** 实现 `internal/dialer`（IP 选择、SNI、自定义证书校验、连接复用）与 `internal/mitm`（CONNECT/MITM/隧道/反向代理/PAC），并让 `fastgithub run` 在 38457 提供显式代理。
 
-**Architecture:** `dialer` 从 `config.Store` 取域名规则、从 `resolver.Resolver` 取竞速后的 IP，`DialTLS` 用自定义 `VerifyPeerCertificate` 复刻原版 SAN 判定；`mitm.Server` 在 38457 上按首字节分派 CONNECT / 绝对 URI / PAC，CONNECT 命中规则时用本地 CA 做 MITM，否则盲隧道；反向代理用 `http.Transport`（`DialContext`/`DialTLSContext` 都走 dialer）。
+**Architecture:** `dialer` 从 `config.Store` 取域名规则、从 `resolver.Resolver` 取竞速后的 IP，`DialTLS` 用自定义 `VerifyConnection` 复刻原版 SAN 判定；`mitm.Server` 在 38457 上按首字节分派 CONNECT / 绝对 URI / PAC，CONNECT 命中规则时用本地 CA 做 MITM，否则盲隧道；反向代理用 `http.Transport`（`DialContext`/`DialTLSContext` 都走 dialer）。
 
 **Tech Stack:** Go 1.22，仅标准库（`crypto/tls`/`crypto/x509`/`net`/`net/http`/`net/http/httputil` 语义、`bufio`/`context`/`errors`/`io`/`sync`），无第三方模块；`CGO_ENABLED=0`。
 
@@ -14,7 +14,7 @@
 
 - 查询/拨号顺序：`domain.ip` 优先 → resolver 结果；同一 IP 去重。
 - 连接超时 10s、TLS 握手 10s；隧道空闲超时 5min；缓冲区 32KB 池化。
-- 证书校验：`InsecureSkipVerify=true` + `VerifyPeerCertificate`；链用系统根（测试可注入）；名称用设计文档的手写规则 `dnsName == host || (dnsName 以 * 开头 && host 以 dnsName[1:] 结尾)`；`tls_ignore_name_mismatch=true` 只跳过名称检查。
+- 证书校验：`InsecureSkipVerify=true` + `VerifyConnection`；链用系统根（测试可注入）；名称用设计文档的手写规则 `dnsName == host || (dnsName 以 * 开头 && host 以 dnsName[1:] 结尾)`；`tls_ignore_name_mismatch=true` 只跳过名称检查。
 - SNI：`conf.SNIPattern()` 展开后作为 `tls.Config.ServerName`；值为 IP 字面量时 Go 不发送 SNI（RFC 6066），`@ipaddress` 等价于不发 SNI，必须用假 TLS 服务器断言。
 - 反向代理保留原始 `Host`；`Destination` 用 `config.JoinDestination` 后拼接请求路径。
 - 每个任务结束时 `go test ./...` 全绿、`go vet`/`gofmt` 无输出。
@@ -30,7 +30,7 @@
 | `internal/dialer/pool.go` | 空闲 TCP 连接复用 |
 | `internal/dialer/transport.go` | `http.RoundTripper`（DialContext/DialTLSContext 走 dialer） |
 | `internal/mitm/connect.go` | CONNECT 解析与响应 |
-| `internal/mitm/sniff.go` | 首字节 TLS 判定 |
+| `internal/mitm/sniff.go` | 前两字节 TLS 判定 |
 | `internal/mitm/tunnel.go` | 双向复制与空闲超时 |
 | `internal/mitm/reverse.go` | 反向代理、短路响应、Destination |
 | `internal/mitm/pac.go` | PAC 文本生成 |
@@ -59,7 +59,7 @@ func NewPool(maxIdle int, idleTimeout time.Duration) *Pool
 要点：
 - `ips(ctx, t)`：`t.Domain.IP` 解析后置首；host 是 IP 字面量时直接用；否则 `resolver.Lookup`；去重；resolver 失败但有 `conf.IP` 时仍可用。
 - `DialTCP`：按 IP 顺序逐个 `DialContext`，每个 10s，聚合错误。
-- `DialTLS`：`dialFirst` 返回实际 IP；`ServerName = config.ExpandSNI(conf.SNIPattern(), host, ip)`；`VerifyPeerCertificate` 调 `verifyPeer(raw, host, ignore, roots)`；`HandshakeContext` 10s。
+- `DialTLS`：`dialFirst` 返回实际 IP；`ServerName = config.ExpandSNI(conf.SNIPattern(), host, ip)`；`VerifyConnection` 调 `verifyParsed(certs, host, ignore, roots)`；`HandshakeContext` 10s。
 - `tlsverify.go`：解析链、`Intermediates`、`Verify`（ServerAuth）；名称匹配按设计规则，IP 目标比较 IP SAN。
 - `transport.go`：`http.Transport{DialContext, DialTLSContext, ForceAttemptHTTP2:false, TLSNextProto: 空 map}`；两者都从 `addr` 解析 host/port 并查 Store。
 - `pool.go`：`map[string][]*idleConn` + 过期清理；测试 Get/Put/过期/关闭。
@@ -105,7 +105,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn)
 ```
 
 要点：
-- `ServeConn`：`Peek(1)` 为 `0x16` → 透明 TLS（当前无 SNI 时用 CONNECT 目标）；`Peek(7) == "CONNECT"` → CONNECT；否则单连接 `http.Server` 处理 PAC/绝对 URI。
+- `ServeConn`：`Peek(2)` 匹配 `0x16 0x03` → 透明 TLS（无 SNI 时拒绝）；`Peek(7) == "CONNECT"` → CONNECT；否则单连接 `http.Server` 处理 PAC/绝对 URI。
 - CONNECT 命中 Store 规则 → 回 200 后 `tls.Server`，`GetCertificate` 按 SNI（空则用 CONNECT host）取叶子；否则先拨上游再回 200 并隧道。
 - MITM 握手后把 `*tls.Conn` 交给单连接 `http.Server`，handler 为 reverse。
 - `bufferedConn` 保留 `bufio.Reader` 中已 peek 的字节。

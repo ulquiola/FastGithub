@@ -121,3 +121,18 @@ func TestJoinPath(t *testing.T) {
 		}
 	}
 }
+
+func TestReverseProxyPreservesEncodedPath(t *testing.T) {
+	store := testStore(t, map[string]*config.Domain{"example.com": {}})
+	var got *http.Request
+	rp := NewReverseProxy(store, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		got = r
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
+	}))
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/a%2Fb/c", nil)
+	req.Host = "example.com"
+	rp.ServeHTTP(httptest.NewRecorder(), req)
+	if got.URL.Path != "/a/b/c" || got.URL.EscapedPath() != "/a%2Fb/c" {
+		t.Fatalf("path=%q escaped=%q，编码斜杠应保留", got.URL.Path, got.URL.EscapedPath())
+	}
+}

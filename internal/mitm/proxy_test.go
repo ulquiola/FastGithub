@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -54,9 +55,16 @@ func startProxy(t *testing.T, server *Server) string {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	var mu sync.Mutex
+	conns := map[net.Conn]struct{}{}
 	t.Cleanup(func() {
 		cancel()
 		ln.Close()
+		mu.Lock()
+		for conn := range conns {
+			conn.Close()
+		}
+		mu.Unlock()
 	})
 	go func() {
 		for {
@@ -64,7 +72,17 @@ func startProxy(t *testing.T, server *Server) string {
 			if err != nil {
 				return
 			}
-			go server.ServeConn(ctx, conn)
+			mu.Lock()
+			conns[conn] = struct{}{}
+			mu.Unlock()
+			go func(conn net.Conn) {
+				defer func() {
+					mu.Lock()
+					delete(conns, conn)
+					mu.Unlock()
+				}()
+				server.ServeConn(ctx, conn)
+			}(conn)
 		}
 	}()
 	return ln.Addr().String()
@@ -192,5 +210,128 @@ func TestServerPAC(t *testing.T) {
 	}
 	if !strings.Contains(text, "shExpMatch(host, 'github.com')") {
 		t.Fatalf("PAC 缺少规则: %s", text)
+	}
+}
+
+type loopbackResolver struct{}
+
+func (loopbackResolver) Lookup(context.Context, string) ([]net.IP, error) {
+	return []net.IP{net.ParseIP("127.0.0.1")}, nil
+}
+
+func TestServerTunnelKeepsPipelinedBytes(t *testing.T) {
+	server, _ := newTestServer(t, map[string]*config.Domain{})
+	proxyAddr := startProxy(t, server)
+
+	echoLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echoLn.Close()
+	go func() {
+		conn, err := echoLn.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		io.Copy(conn, conn)
+	}()
+
+	conn, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	// CONNECT 与 payload 一次写入，验证 bufio 预读的字节没有丢失。
+	fmt.Fprintf(conn, "CONNECT 127.0.0.1:%d HTTP/1.1\r\nHost: x\r\n\r\nXYZ", echoLn.Addr().(*net.TCPAddr).Port)
+	br := bufio.NewReader(conn)
+	if _, err := http.ReadResponse(br, nil); err != nil {
+		t.Fatalf("CONNECT 响应: %v", err)
+	}
+	buf := make([]byte, 3)
+	if _, err := io.ReadFull(br, buf); err != nil {
+		t.Fatal(err)
+	}
+	if string(buf) != "XYZ" {
+		t.Fatalf("预读字节丢失，got %q", buf)
+	}
+}
+
+func TestServerTransparentTLS(t *testing.T) {
+	server, ca := newTestServer(t, map[string]*config.Domain{"example.com": {}})
+	roots := x509.NewCertPool()
+	roots.AddCert(ca.Certificate())
+
+	serverSide, clientSide := net.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go server.ServeConn(ctx, serverSide)
+
+	tlsConn := tls.Client(clientSide, &tls.Config{ServerName: "example.com", RootCAs: roots})
+	if err := tlsConn.Handshake(); err != nil {
+		t.Fatalf("透明 TLS 握手失败: %v", err)
+	}
+	tlsConn.Close()
+}
+
+func TestServerDestinationSNI(t *testing.T) {
+	ca, err := certs.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	destLeaf, err := ca.LeafFor("fonts.geekzu.org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sniCh := make(chan string, 1)
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sniCh <- r.TLS.ServerName
+		io.WriteString(w, "ok")
+	}))
+	upstream.TLS = &tls.Config{Certificates: []tls.Certificate{*destLeaf}}
+	upstream.StartTLS()
+	defer upstream.Close()
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	cfg.Domains = map[string]*config.Domain{
+		"fonts.googleapis.com": {Destination: "https://fonts.geekzu.org:" + upstreamURL.Port() + "/"},
+	}
+	store, err := config.NewStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(ca.Certificate())
+	d := dialer.New(store, loopbackResolver{}, roots)
+	server := NewServer(store, d, ca, NewReverseProxy(store, dialer.NewTransport(store, d)), time.Minute)
+	proxyAddr := startProxy(t, server)
+
+	proxyURL, err := url.Parse("http://" + proxyAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: &http.Transport{
+		Proxy:           http.ProxyURL(proxyURL),
+		TLSClientConfig: &tls.Config{RootCAs: roots},
+	}}
+	resp, err := client.Get("https://fonts.googleapis.com:" + upstreamURL.Port() + "/css")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "ok" {
+		t.Fatalf("body = %q", body)
+	}
+	if sni := <-sniCh; sni != "fonts.geekzu.org" {
+		t.Fatalf("上游 SNI = %q，期望 destination host", sni)
 	}
 }

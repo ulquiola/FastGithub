@@ -2,6 +2,7 @@ package mitm
 
 import (
 	"bufio"
+	"io"
 	"strings"
 	"testing"
 )
@@ -46,5 +47,35 @@ func TestWriteConnectResponses(t *testing.T) {
 	var bad strings.Builder
 	if err := WriteConnectError(&bad, 502); err != nil || !strings.Contains(bad.String(), "502 Bad Gateway") {
 		t.Fatalf("bad = %q err=%v", bad.String(), err)
+	}
+}
+
+func TestReadConnectRejectsLongSingleLine(t *testing.T) {
+	input := "CONNECT example.com:443 HTTP/1.1\r\n" + strings.Repeat("A", 1<<20)
+	br := bufio.NewReaderSize(strings.NewReader(input), maxConnectHeader+1)
+	if _, _, err := ReadConnect(br); err == nil {
+		t.Fatal("超长单行应被有界读取拒绝")
+	}
+}
+
+type countingReader struct {
+	r io.Reader
+	n int
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
+}
+
+func TestReadConnectBoundsSingleLineRead(t *testing.T) {
+	src := &countingReader{r: strings.NewReader("CONNECT example.com:443 HTTP/1.1\r\n" + strings.Repeat("A", 1<<20))}
+	br := bufio.NewReaderSize(src, maxConnectHeader+1)
+	if _, _, err := ReadConnect(br); err == nil {
+		t.Fatal("超长单行应被拒绝")
+	}
+	if src.n > 2*maxConnectHeader {
+		t.Fatalf("读取了 %d 字节，期望有界在 %d 附近", src.n, maxConnectHeader)
 	}
 }

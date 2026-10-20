@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"fastgithub-go/internal/certs"
 	"fastgithub-go/internal/config"
@@ -207,5 +208,34 @@ func TestMatchName(t *testing.T) {
 	ipCert := &x509.Certificate{IPAddresses: []net.IP{net.ParseIP("1.2.3.4")}}
 	if !matchName(ipCert, "1.2.3.4") {
 		t.Fatal("IP SAN 应匹配")
+	}
+}
+
+func TestDialTLSDefaultsSNIWhenNoDomain(t *testing.T) {
+	ca := testAuthority(t)
+	leaf, err := ca.LeafFor("example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr, sniCh := startTLSServer(t, *leaf)
+	d := New(testStore(t, &config.Domain{}), fakeResolver{ips: []net.IP{net.ParseIP("127.0.0.1")}}, rootsFor(ca))
+	conn, err := d.DialTLS(context.Background(), Target{Host: "example.com", Port: portOf(t, addr)})
+	if err != nil {
+		t.Fatalf("DialTLS: %v", err)
+	}
+	defer conn.Close()
+	if got := <-sniCh; got != "example.com" {
+		t.Fatalf("无域名规则时应默认发送主机名，SNI = %q", got)
+	}
+}
+
+func TestTimeoutFor(t *testing.T) {
+	d := New(testStore(t, &config.Domain{}), fakeResolver{}, nil)
+	if got := d.timeoutFor(Target{}); got != connectTimeout {
+		t.Fatalf("默认超时 = %v", got)
+	}
+	conf := &config.Domain{Timeout: config.Duration(3 * time.Second)}
+	if got := d.timeoutFor(Target{Domain: conf}); got != 3*time.Second {
+		t.Fatalf("域名超时 = %v", got)
 	}
 }

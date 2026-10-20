@@ -43,15 +43,18 @@ func ReadConnect(br *bufio.Reader) (string, int, error) {
 }
 
 func readHeaderLine(br *bufio.Reader, total *int) (string, error) {
-	line, err := br.ReadString('\n')
+	line, err := br.ReadSlice('\n')
 	*total += len(line)
 	if *total > maxConnectHeader {
 		return "", fmt.Errorf("CONNECT 请求头超过 %d 字节", maxConnectHeader)
 	}
+	if err == bufio.ErrBufferFull {
+		return "", fmt.Errorf("CONNECT 请求行过长")
+	}
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimRight(line, "\r\n"), nil
+	return strings.TrimRight(string(line), "\r\n"), nil
 }
 
 // WriteConnectEstablished 返回 200，客户端随后开始 TLS 握手或隧道数据。

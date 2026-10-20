@@ -9,7 +9,7 @@ import (
 func BuildPAC(patterns []string, proxyHost string) []byte {
 	var b strings.Builder
 	b.WriteString("function FindProxyForURL(url, host){\n")
-	fmt.Fprintf(&b, "    var fastgithub = 'PROXY %s';\n", proxyHost)
+	fmt.Fprintf(&b, "    var fastgithub = 'PROXY %s';\n", escapeJS(proxyHost))
 	for _, pattern := range patterns {
 		fmt.Fprintf(&b, "    if (shExpMatch(host, '%s')) return fastgithub;\n", escapeJS(pattern))
 	}

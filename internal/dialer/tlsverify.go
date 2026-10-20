@@ -7,18 +7,10 @@ import (
 	"strings"
 )
 
-// verifyPeer 先验证证书链，再按原版规则校验名称。
-func verifyPeer(rawCerts [][]byte, host string, ignoreName bool, roots *x509.CertPool) error {
-	if len(rawCerts) == 0 {
+// verifyParsed 先验证证书链，再按原版规则校验名称。
+func verifyParsed(certs []*x509.Certificate, host string, ignoreName bool, roots *x509.CertPool) error {
+	if len(certs) == 0 {
 		return fmt.Errorf("服务器未提供证书")
-	}
-	certs := make([]*x509.Certificate, len(rawCerts))
-	for i, raw := range rawCerts {
-		cert, err := x509.ParseCertificate(raw)
-		if err != nil {
-			return fmt.Errorf("解析服务器证书失败: %w", err)
-		}
-		certs[i] = cert
 	}
 	intermediates := x509.NewCertPool()
 	for _, cert := range certs[1:] {

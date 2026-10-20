@@ -44,6 +44,9 @@ func copyIdle(dst, src net.Conn, idle time.Duration) error {
 		}
 		n, err := src.Read(buf)
 		if n > 0 {
+			if idle > 0 {
+				dst.SetWriteDeadline(time.Now().Add(idle))
+			}
 			if _, werr := dst.Write(buf[:n]); werr != nil {
 				return werr
 			}
