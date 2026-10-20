@@ -33,6 +33,7 @@ async function loadStatus() {
     ['拦截模式', s.intercept],
     ['CA 指纹', `${s.caFingerprint.slice(0, 16)}…`],
     ['DNS 源', `DoH ${s.dns.doh} / 回退 ${s.dns.fallback}`],
+    ['PAC', `http://127.0.0.1:${s.proxyPort}/`],
   ];
   const list = $('status-list');
   list.replaceChildren();
@@ -90,6 +91,41 @@ async function loadCertStatus() {
   }
 }
 
+async function loadSystemProxy() {
+  const badge = $('sysproxy-status');
+  const detail = $('sysproxy-detail');
+  const enable = $('enable-sysproxy');
+  const disable = $('disable-sysproxy');
+  try {
+    const s = await fetch('/api/systemproxy').then(r => r.json());
+    if (!s.supported) {
+      badge.textContent = '不可用';
+      badge.className = 'badge muted';
+      detail.textContent = '当前平台请在系统中手动设置代理';
+      enable.disabled = true;
+      disable.disabled = true;
+      return;
+    }
+    if (s.enabled) {
+      badge.textContent = '已启用';
+      badge.className = 'badge ok';
+      detail.textContent = `${s.service} → ${s.server}:${s.port}`;
+    } else {
+      badge.textContent = '未启用';
+      badge.className = 'badge muted';
+      detail.textContent = s.service ? `${s.service} 未指向 FastGithub` : '未检测到可用网络服务';
+    }
+    enable.disabled = s.enabled;
+    disable.disabled = !s.enabled;
+  } catch (e) {
+    badge.textContent = '检测失败';
+    badge.className = 'badge err';
+    detail.textContent = e.message;
+    enable.disabled = false;
+    disable.disabled = true;
+  }
+}
+
 function connectLogs() {
   const list = $('logs');
   const source = new EventSource('/api/logs');
@@ -128,6 +164,7 @@ async function post(path, button) {
     showToast(e.message, false);
   } finally {
     await loadCertStatus();
+    await loadSystemProxy();
   }
 }
 
@@ -135,12 +172,19 @@ $('install-cert').onclick = function () { post('/api/cert/install', this); };
 $('uninstall-cert').onclick = function () {
   if (confirm('确定从信任库移除 CA？')) post('/api/cert/uninstall', this);
 };
+$('enable-sysproxy').onclick = function () { post('/api/systemproxy/enable', this); };
+$('disable-sysproxy').onclick = function () {
+  if (confirm('关闭系统代理后，浏览器将不再经过 FastGithub。确定关闭？')) {
+    post('/api/systemproxy/disable', this);
+  }
+};
 $('intercept').onclick = function () { post('/api/intercept', this); };
 
 loadStatus();
 loadDomains();
 loadFlow();
 loadCertStatus();
+loadSystemProxy();
 connectLogs();
 setInterval(loadFlow, 1000);
 setInterval(loadDomains, 5000);

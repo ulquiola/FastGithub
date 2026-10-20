@@ -30,6 +30,8 @@ $ fastgithub version
 
 `run` 启动显式代理与 Web UI；Windows 上若 WinDivert 可用且 `intercept.mode != "off"`，还会启用 443/80/22/9418 透明入口（22/9418 固定转发到 `github.com`）：命中域名走本地 CA 的 MITM，未命中走盲隧道，`GET http://127.0.0.1:38457/` 返回 PAC，`GET /flowStatistics` 返回 `TotalRead/TotalWrite/ReadRate/WriteRate`。UI 提供状态、域名命中、实时日志（SSE）与 CA 下载；变更接口需要启动目录下 `ui.token` 中的令牌（0600）。
 
+macOS 没有透明拦截，浏览器需要走系统代理：Web UI 的“系统代理”卡片可一键启用/关闭当前主网络服务（如 Wi-Fi）的 HTTP/HTTPS 代理，指向 `127.0.0.1:38457`；也可以手动配置代理或把 PAC 地址 `http://127.0.0.1:38457/` 填入“自动代理配置”。进程正常退出时会自动关闭指向本程序的系统代理，避免整机断网。Windows/Linux 该接口返回“不支持”。
+
 `install-cert` 会在 `cacert/` 生成 CA（已存在则复用），并把证书加入系统信任库；`uninstall-cert` 只从信任库移除，CA 文件仍保留（需要时手动删除 `cacert/`）。Windows 需要管理员权限，Linux 需要 root；macOS 非 root 时自动回退到当前用户的登录钥匙串（无需 sudo，Web UI 的“安装 CA / 卸载 CA”按钮可直接使用）；系统级安装可用 sudo。卸载会同时清理系统与用户钥匙串，系统级证书仍需 sudo。Windows 下路径分隔符显示为 `\`。
 
 实现按里程碑推进：

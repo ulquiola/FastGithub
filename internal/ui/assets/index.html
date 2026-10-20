@@ -39,6 +39,19 @@
         <button id="intercept" class="btn ghost">切换拦截</button>
       </article>
 
+      <article class="card">
+        <div class="card-head">
+          <h2>系统代理</h2>
+          <span id="sysproxy-status" class="badge muted">检测中…</span>
+        </div>
+        <p class="hint">浏览器只有走系统代理，流量才会经过 FastGithub。</p>
+        <div class="actions">
+          <button id="enable-sysproxy" class="btn primary">启用系统代理</button>
+          <button id="disable-sysproxy" class="btn ghost">关闭系统代理</button>
+        </div>
+        <p id="sysproxy-detail" class="hint mono">…</p>
+      </article>
+
       <article class="card cert-card">
         <div class="card-head">
           <h2>证书信任</h2>

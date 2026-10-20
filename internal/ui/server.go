@@ -15,6 +15,7 @@ import (
 	"fastgithub-go/internal/certs"
 	"fastgithub-go/internal/config"
 	"fastgithub-go/internal/flow"
+	"fastgithub-go/internal/sysproxy"
 )
 
 //go:embed assets/index.html assets/app.js assets/style.css
@@ -32,6 +33,10 @@ type Options struct {
 	InstallCert   func(string) error
 	UninstallCert func(string) error
 	CertStatus    func(string) (certs.TrustStatus, error)
+
+	SystemProxyStatus  func(int) (sysproxy.Status, error)
+	EnableSystemProxy  func(int) error
+	DisableSystemProxy func(int) error
 }
 
 // Server 提供内嵌页面、REST、SSE 与兼容端点。
@@ -50,6 +55,15 @@ func New(opts Options) *Server {
 	if opts.CertStatus == nil {
 		opts.CertStatus = certs.Status
 	}
+	if opts.SystemProxyStatus == nil {
+		opts.SystemProxyStatus = sysproxy.Get
+	}
+	if opts.EnableSystemProxy == nil {
+		opts.EnableSystemProxy = sysproxy.Enable
+	}
+	if opts.DisableSystemProxy == nil {
+		opts.DisableSystemProxy = sysproxy.Disable
+	}
 	s := &Server{opts: opts, mux: http.NewServeMux()}
 	s.mux.HandleFunc("/", s.index)
 	s.mux.HandleFunc("/app.js", staticAsset("assets/app.js", "application/javascript; charset=utf-8"))
@@ -61,6 +75,9 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("/api/cert/status", s.certStatus)
 	s.mux.HandleFunc("/api/cert/install", s.installCert)
 	s.mux.HandleFunc("/api/cert/uninstall", s.uninstallCert)
+	s.mux.HandleFunc("/api/systemproxy", s.systemProxy)
+	s.mux.HandleFunc("/api/systemproxy/enable", s.enableSystemProxy)
+	s.mux.HandleFunc("/api/systemproxy/disable", s.disableSystemProxy)
 	s.mux.HandleFunc("/api/intercept", s.intercept)
 	s.mux.Handle("/flowStatistics", FlowStatistics(opts.Tracker))
 	return s
@@ -275,6 +292,50 @@ func (s *Server) uninstallCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.opts.UninstallCert(s.opts.CA.CertPath()); err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) systemProxy(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
+	status, err := s.opts.SystemProxyStatus(s.opts.Config.Server.ProxyPort)
+	if err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, status)
+}
+
+func (s *Server) enableSystemProxy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorized(r) {
+		writeJSONStatus(w, http.StatusUnauthorized, map[string]string{"error": "无效的令牌"})
+		return
+	}
+	if err := s.opts.EnableSystemProxy(s.opts.Config.Server.ProxyPort); err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) disableSystemProxy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorized(r) {
+		writeJSONStatus(w, http.StatusUnauthorized, map[string]string{"error": "无效的令牌"})
+		return
+	}
+	if err := s.opts.DisableSystemProxy(s.opts.Config.Server.ProxyPort); err != nil {
 		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

@@ -16,6 +16,7 @@ import (
 	"fastgithub-go/internal/flow"
 	"fastgithub-go/internal/mitm"
 	"fastgithub-go/internal/resolver"
+	"fastgithub-go/internal/sysproxy"
 	"fastgithub-go/internal/ui"
 )
 
@@ -86,6 +87,15 @@ func serve(ctx context.Context, cfg *config.Config, store *config.Store, proxyLn
 	uiHTTP := &http.Server{Handler: uiServer.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go uiHTTP.Serve(uiLn)
 	defer uiHTTP.Close()
+
+	// 进程退出后系统代理必须关闭，否则整机网络会指向已停止的端口。
+	defer func() {
+		if status, err := sysproxy.Get(cfg.Server.ProxyPort); err == nil && status.Enabled {
+			if err := sysproxy.Disable(cfg.Server.ProxyPort); err != nil {
+				log.Printf("退出时关闭系统代理失败: %v", err)
+			}
+		}
+	}()
 
 	cleanupTransparent, err := startTransparent(ctx, server, store, cfg)
 	if err != nil {

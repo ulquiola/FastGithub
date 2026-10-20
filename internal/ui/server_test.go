@@ -17,6 +17,7 @@ import (
 	"fastgithub-go/internal/certs"
 	"fastgithub-go/internal/config"
 	"fastgithub-go/internal/flow"
+	"fastgithub-go/internal/sysproxy"
 )
 
 func localRequest(method, path string, body ...io.Reader) *http.Request {
@@ -332,5 +333,64 @@ func TestCertStatusEndpoint(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK || !body.Installed || body.Scope != "user" {
 		t.Fatalf("status=%d body=%+v", rec.Code, body)
+	}
+}
+
+func TestSystemProxyEndpoints(t *testing.T) {
+	cfg := config.Default()
+	cfg.Server.ProxyPort = 38457
+	enabled := false
+	var calls []string
+	s := New(Options{
+		Config: cfg, Token: "testtoken",
+		Tracker: flow.NewTracker(1), Ring: flow.NewRing(1),
+		SystemProxyStatus: func(port int) (sysproxy.Status, error) {
+			return sysproxy.Status{
+				Supported: true, Enabled: enabled, Service: "Wi-Fi",
+				Server: "127.0.0.1", Port: port,
+			}, nil
+		},
+		EnableSystemProxy: func(int) error {
+			enabled = true
+			calls = append(calls, "enable")
+			return nil
+		},
+		DisableSystemProxy: func(int) error {
+			enabled = false
+			calls = append(calls, "disable")
+			return nil
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, localRequest(http.MethodGet, "/api/systemproxy"))
+	var status sysproxy.Status
+	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK || status.Enabled || status.Service != "Wi-Fi" {
+		t.Fatalf("status=%d body=%+v", rec.Code, status)
+	}
+
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, localRequest(http.MethodPost, "/api/systemproxy/enable"))
+	if rec.Code != http.StatusUnauthorized || len(calls) != 0 {
+		t.Fatalf("status=%d calls=%v", rec.Code, calls)
+	}
+
+	req := localRequest(http.MethodPost, "/api/systemproxy/enable")
+	req.Header.Set("X-FastGithub-Token", "testtoken")
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !enabled || len(calls) != 1 {
+		t.Fatalf("status=%d enabled=%v calls=%v body=%s", rec.Code, enabled, calls, rec.Body.String())
+	}
+
+	req = localRequest(http.MethodPost, "/api/systemproxy/disable")
+	req.Header.Set("X-FastGithub-Token", "testtoken")
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || enabled || len(calls) != 2 {
+		t.Fatalf("status=%d enabled=%v calls=%v body=%s", rec.Code, enabled, calls, rec.Body.String())
 	}
 }
