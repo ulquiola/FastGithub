@@ -289,7 +289,7 @@ func (d *Dialer) DialTLS(ctx context.Context, t Target) (*tls.Conn, error)
 ```
 
 - IP 顺序：`conf.IP` 优先 → resolver 结果（竞速排序）。
-- SNI：`conf.SNI()` 展开 `@domain`/`@ipaddress`/`@random`，结果为空则不发 SNI。
+- SNI：`conf.SNIPattern()` 展开 `@domain`/`@ipaddress`/`@random`，结果为空则不发 SNI。
   - 注意：当 SNI 值为 IP 字面量时，Go 与 .NET 都**不会**在 ClientHello 中发送 SNI（RFC 6066 禁止）。因此 `@ipaddress` 的实际效果等于不发 SNI，该等价性写入测试用例。
 - 证书校验：`InsecureSkipVerify=true` + 自定义 `VerifyPeerCertificate`：
   - 链验证（系统根 + 可选本机 CA 池）；
@@ -373,8 +373,8 @@ function FindProxyForURL(url, host){
 |---|---|---|---|
 | `DomainPattern.cs` | `internal/config/pattern.go` | `*`→`[^.]*`、大小写不敏感、锚定、排序比较器 | `pattern_test.go` |
 | `TlsSniPattern.cs` | `internal/config/sni.go` | 三个变量替换、IP 值不发 SNI | `sni_test.go` |
-| `DomainConfig.GetTlsSniPattern` | `config.Domain.SNI()` | `tls_sni=false` → 空；`true`+空表达式 → `@domain` | `config_test.go` |
-| `FastGithubConfig.cs` | `internal/config/store.go` | 排序查找、缓存、热更新整体替换 | `store_test.go` |
+| `DomainConfig.GetTlsSniPattern` | `config.Domain.SNIPattern()` | `tls_sni=false` → 空；`true`+空表达式 → `@domain` | `sni_test.go` |
+| `FastGithubConfig.cs` | `internal/config/store.go` | 排序查找、缓存（上限 4096 条）、热更新整体替换 | `store_test.go` |
 | `GlobalListener.cs` | `internal/app/ports.go` | 从偏好端口向上找空闲；TCP/UDP 都判 | `ports_test.go` |
 | `DnsClient.cs` | `internal/resolver/*` | TTL 夹逼、负缓存时长、A/AAAA、并发去重 | `resolve_test.go` |
 | `DnscryptProxy.cs` | 删除（内置 DoH） | 不再拉起外部进程 | `doh_test.go` |
@@ -502,3 +502,4 @@ fastgithub-go/
 - IPv6 上游：原版按 `OSSupportsIPv6` 决定是否查 AAAA；Go 版默认查，可配置关闭。
 - 是否在内置 DoH 之外保留"外挂 dnscrypt-proxy"兼容开关：暂不做，配置里出现 `dnscrypt` 键会报错。
 - 性能基准（并发连接数、单连接吞吐）在 M3 补 `go test -bench`。
+- **`@ipaddress` 展开为 IP 字面量作 SNI 的语义（M1-D 前必须确认）**：Go 与 .NET 对 IP 字面量都不发送 SNI（RFC 6066），实际等价于"不发 SNI"。M1-D 实现 `dialer` 前须对照原版行为确认；若确需发送 IP 字面量 SNI，标准库不支持，需自定义 ClientHello，成本较高。
