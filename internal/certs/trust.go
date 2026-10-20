@@ -107,7 +107,7 @@ func isAuthError(err error) bool {
 	msg := strings.ToLower(err.Error())
 	for _, marker := range []string{
 		"authorization", "denied", "not permitted", "operation not permitted",
-		"must be run as root", "sudo",
+		"must be run as root", "sudo", "permission", "not authorized",
 	} {
 		if strings.Contains(msg, marker) {
 			return true

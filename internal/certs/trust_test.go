@@ -245,3 +245,20 @@ func TestDarwinUninstallFallsBackToAuthorizationPrompt(t *testing.T) {
 		t.Fatalf("script = %q", calls[1].args[1])
 	}
 }
+
+func TestDarwinInstallFallsBackOnWritePermissions(t *testing.T) {
+	var calls []commandCall
+	run := func(name string, args ...string) error {
+		calls = append(calls, commandCall{name, args})
+		if name == "security" {
+			return errors.New("exit status 1: SecCertificateAddToKeychain: Write permissions error.")
+		}
+		return nil
+	}
+	if err := install("/tmp/ca.crt", "darwin", run, func(string, string) error { return nil }); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if len(calls) != 2 || calls[1].name != "osascript" {
+		t.Fatalf("calls = %#v", calls)
+	}
+}
