@@ -5,6 +5,10 @@ import (
 	"sync"
 )
 
+// maxCacheEntries 限制缓存条目数：常驻代理按连接查询域名，唯一域名可能被泛洪。
+// 超过上限时整体重置，重置后的语义与新建 Store 一致（未命中会重新计算）。
+const maxCacheEntries = 4096
+
 // Store 提供按优先级匹配的域名规则查询，并缓存结果。
 type Store struct {
 	mu       sync.Mutex
@@ -54,6 +58,9 @@ func (s *Store) Lookup(domain string) (*Domain, bool) {
 			found = s.byKey[p]
 			break
 		}
+	}
+	if len(s.cache) >= maxCacheEntries {
+		s.cache = map[string]*Domain{}
 	}
 	s.cache[domain] = found
 	return found, found != nil

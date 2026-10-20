@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestStoreLookupPrefersExact(t *testing.T) {
 	c := Default()
@@ -69,6 +72,27 @@ func TestStoreCacheKeepsMisses(t *testing.T) {
 	}
 	if v, ok := st.cache["nope.example"]; !ok || v != nil {
 		t.Fatalf("cache[nope.example] = %+v, %v，未命中应缓存 nil", v, ok)
+	}
+}
+
+func TestStoreCacheBounded(t *testing.T) {
+	c := Default()
+	c.Domains = map[string]*Domain{"github.com": {}}
+	st, err := NewStore(c)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	for i := 0; i < maxCacheEntries+4; i++ {
+		st.Lookup(fmt.Sprintf("host-%d.example", i))
+	}
+	if n := len(st.cache); n != 4 {
+		t.Fatalf("cache 条目数 = %d，期望上限重置后为 4", n)
+	}
+	if _, ok := st.Lookup("after-reset.example"); ok {
+		t.Fatal("after-reset.example 不应命中")
+	}
+	if v, ok := st.cache["after-reset.example"]; !ok || v != nil {
+		t.Fatalf("cache[after-reset.example] = %+v, %v，期望重置后仍缓存未命中", v, ok)
 	}
 }
 
