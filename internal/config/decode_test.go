@@ -81,6 +81,46 @@ func TestDecodeUnknownKey(t *testing.T) {
 	}
 }
 
+type namedString string
+
+type namedSlice struct {
+	Names []namedString `toml:"names"`
+}
+
+func TestDecodeNilTree(t *testing.T) {
+	var s sample
+	if err := Decode(nil, &s); err == nil {
+		t.Fatal("Decode(nil, …) 应返回错误")
+	}
+}
+
+func TestDecodeNamedStringSlice(t *testing.T) {
+	root, err := Parse([]byte(`names = ["a", "b"]` + "\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	var s namedSlice
+	if err := Decode(root, &s); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if len(s.Names) != 2 || s.Names[1] != namedString("b") {
+		t.Fatalf("names = %#v", s.Names)
+	}
+}
+
+func TestDecodeUnknownKeysSortedWithLines(t *testing.T) {
+	root, err := Parse([]byte("z = 1\na = 2\nm = 3\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	var s struct{}
+	err = Decode(root, &s)
+	want := "未知配置项: z (第 1 行), a (第 2 行), m (第 3 行)"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v，期望 %q", err, want)
+	}
+}
+
 func TestDecodeTypeMismatch(t *testing.T) {
 	root, err := Parse([]byte(`port = "x"` + "\n"))
 	if err != nil {

@@ -214,6 +214,32 @@ func TestParseArrayBoundaries(t *testing.T) {
 	}
 }
 
+func TestParseIntegerUnderscores(t *testing.T) {
+	root, err := Parse([]byte("n = 1_000_000\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := root.Table["n"].Int; got != 1000000 {
+		t.Fatalf("n = %d", got)
+	}
+	for _, src := range []string{"n = _1\n", "n = 1_\n", "n = 1__0\n", "n = 1_0_\n"} {
+		if _, err := Parse([]byte(src)); err == nil || !strings.Contains(err.Error(), "下划线") {
+			t.Fatalf("Parse(%q) err = %v，期望下划线错误", src, err)
+		}
+	}
+}
+
+func TestParseRepeatedTableMerges(t *testing.T) {
+	root, err := Parse([]byte("[a]\nx = 1\n[a]\ny = 2\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	a := root.Table["a"].Table
+	if a["x"].Int != 1 || a["y"].Int != 2 {
+		t.Fatalf("重复表头应合并，实际 %v", keysOf(a))
+	}
+}
+
 func TestParseErrors(t *testing.T) {
 	cases := []struct {
 		name string

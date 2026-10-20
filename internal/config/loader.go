@@ -51,6 +51,20 @@ func Load(mainPath, confDir string) (*Config, error) {
 	if err := loadFile(cfg, mainPath, true); err != nil {
 		return nil, err
 	}
+	names, err := confFiles(confDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range names {
+		if err := loadFile(cfg, filepath.Join(confDir, name), false); err != nil {
+			return nil, err
+		}
+	}
+	return cfg, nil
+}
+
+// confFiles 返回 conf.d 下按文件名升序的 .toml 文件；目录不存在视为空。
+func confFiles(confDir string) ([]string, error) {
 	entries, err := os.ReadDir(confDir)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("读取 %s 失败: %w", confDir, err)
@@ -62,12 +76,7 @@ func Load(mainPath, confDir string) (*Config, error) {
 		}
 	}
 	sort.Strings(names)
-	for _, name := range names {
-		if err := loadFile(cfg, filepath.Join(confDir, name), false); err != nil {
-			return nil, err
-		}
-	}
-	return cfg, nil
+	return names, nil
 }
 
 func loadFile(cfg *Config, path string, required bool) error {
@@ -92,14 +101,12 @@ func loadFile(cfg *Config, path string, required bool) error {
 func Fingerprint(mainPath, confDir string) (string, error) {
 	h := sha256.New()
 	paths := []string{mainPath}
-	entries, err := os.ReadDir(confDir)
-	if err != nil && !os.IsNotExist(err) {
-		return "", fmt.Errorf("读取 %s 失败: %w", confDir, err)
+	names, err := confFiles(confDir)
+	if err != nil {
+		return "", err
 	}
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".toml") {
-			paths = append(paths, filepath.Join(confDir, e.Name()))
-		}
+	for _, name := range names {
+		paths = append(paths, filepath.Join(confDir, name))
 	}
 	for _, p := range paths {
 		data, err := os.ReadFile(p)

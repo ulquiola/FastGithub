@@ -4,27 +4,50 @@ import (
 	"encoding"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 )
 
+type unknownKey struct {
+	name string
+	line int
+}
+
 // Decode 把语法树解码到 out（必须是非空指针）。
-// 未识别的键会聚合到同一个错误里。
+// 未识别的键会按行号、再按键名排序后聚合到同一个错误里。
 func Decode(n *Node, out any) error {
+	if n == nil {
+		return fmt.Errorf("Decode 需要非空语法树")
+	}
 	rv := reflect.ValueOf(out)
 	if rv.Kind() != reflect.Ptr || rv.IsNil() {
 		return fmt.Errorf("Decode 需要非空指针")
 	}
-	var unknown []string
+	var unknown []unknownKey
 	if err := decodeInto(n, rv.Elem(), "", &unknown); err != nil {
 		return err
 	}
 	if len(unknown) > 0 {
-		return fmt.Errorf("未知配置项: %s", strings.Join(unknown, ", "))
+		sort.Slice(unknown, func(i, j int) bool {
+			if unknown[i].line != unknown[j].line {
+				return unknown[i].line < unknown[j].line
+			}
+			return unknown[i].name < unknown[j].name
+		})
+		parts := make([]string, len(unknown))
+		for i, u := range unknown {
+			if u.line > 0 {
+				parts[i] = fmt.Sprintf("%s (第 %d 行)", u.name, u.line)
+			} else {
+				parts[i] = u.name
+			}
+		}
+		return fmt.Errorf("未知配置项: %s", strings.Join(parts, ", "))
 	}
 	return nil
 }
 
-func decodeInto(n *Node, rv reflect.Value, path string, unknown *[]string) error {
+func decodeInto(n *Node, rv reflect.Value, path string, unknown *[]unknownKey) error {
 	if !rv.CanSet() {
 		return fmt.Errorf("%s: 字段不可写", path)
 	}
@@ -64,7 +87,7 @@ func decodeInto(n *Node, rv reflect.Value, path string, unknown *[]string) error
 		for key, child := range n.Table {
 			fv, ok := fields[key]
 			if !ok {
-				*unknown = append(*unknown, joinPath(path, key))
+				*unknown = append(*unknown, unknownKey{name: joinPath(path, key), line: child.Line})
 				continue
 			}
 			if err := decodeInto(child, fv, joinPath(path, key), unknown); err != nil {
@@ -98,11 +121,14 @@ func decodeInto(n *Node, rv reflect.Value, path string, unknown *[]string) error
 			return fmt.Errorf("%s: 仅支持字符串数组", path)
 		}
 		out := reflect.MakeSlice(rv.Type(), 0, len(n.Arr))
+		elemType := rv.Type().Elem()
 		for i, item := range n.Arr {
 			if item.Kind != KindString {
 				return typeErr(fmt.Sprintf("%s[%d]", path, i), "字符串")
 			}
-			out = reflect.Append(out, reflect.ValueOf(item.Str))
+			v := reflect.New(elemType).Elem()
+			v.SetString(item.Str)
+			out = reflect.Append(out, v)
 		}
 		rv.Set(out)
 		return nil

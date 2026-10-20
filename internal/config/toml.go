@@ -119,6 +119,8 @@ func (p *parser) parseLine(text string, line int) error {
 	return p.set(p.table, path, val)
 }
 
+// 同一文件内重复表头（如两次 [a]）会合并到同一张表，不报错。
+// 这是为 conf.d 片段逐文件解析保留的宽松行为，与 TOML 规范的“禁止重定义”不同。
 func (p *parser) walk(path []string, line int) (*Node, error) {
 	t := p.root
 	for _, seg := range path {
@@ -251,12 +253,37 @@ func parseValue(s string, line int) (*Node, error) {
 	case "false":
 		return &Node{Kind: KindBool, Line: line, Bool: false}, nil
 	}
-	iv, err := strconv.ParseInt(strings.ReplaceAll(s, "_", ""), 10, 64)
+	iv, err := parseInteger(s)
 	if err != nil {
-		return nil, fmt.Errorf("无法识别的值 %q", s)
+		return nil, err
 	}
 	return &Node{Kind: KindInt, Line: line, Int: iv}, nil
 }
+
+func parseInteger(s string) (int64, error) {
+	body := s
+	if body[0] == '+' || body[0] == '-' {
+		body = body[1:]
+	}
+	if body == "" {
+		return 0, fmt.Errorf("无法识别的值 %q", s)
+	}
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if c == '_' {
+			if i == 0 || i == len(body)-1 || !isDigit(body[i-1]) || !isDigit(body[i+1]) {
+				return 0, fmt.Errorf("整数的下划线必须位于数字之间")
+			}
+			continue
+		}
+		if !isDigit(c) {
+			return 0, fmt.Errorf("无法识别的值 %q", s)
+		}
+	}
+	return strconv.ParseInt(strings.ReplaceAll(s, "_", ""), 10, 64)
+}
+
+func isDigit(c byte) bool { return '0' <= c && c <= '9' }
 
 func parseQuoted(s string) (string, string, error) {
 	if len(s) == 0 || s[0] != '"' {

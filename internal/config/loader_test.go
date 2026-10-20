@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 )
@@ -205,4 +206,24 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+func TestConfFilesIgnoresNonTOMLAndSorts(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"20-b.toml", "10-a.toml", "README.md", "30-c.TOML"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(""), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub.toml"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	got, err := confFiles(dir)
+	if err != nil {
+		t.Fatalf("confFiles: %v", err)
+	}
+	want := []string{"10-a.toml", "20-b.toml"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("confFiles = %v，期望 %v", got, want)
+	}
 }
