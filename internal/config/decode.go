@@ -17,11 +17,11 @@ type unknownKey struct {
 // 未识别的键会按行号、再按键名排序后聚合到同一个错误里。
 func Decode(n *Node, out any) error {
 	if n == nil {
-		return fmt.Errorf("Decode 需要非空语法树")
+		return fmt.Errorf("语法树不能为空")
 	}
 	rv := reflect.ValueOf(out)
 	if rv.Kind() != reflect.Ptr || rv.IsNil() {
-		return fmt.Errorf("Decode 需要非空指针")
+		return fmt.Errorf("解码目标必须是非空指针")
 	}
 	var unknown []unknownKey
 	if err := decodeInto(n, rv.Elem(), "", &unknown); err != nil {

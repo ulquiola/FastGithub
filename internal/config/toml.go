@@ -280,7 +280,11 @@ func parseInteger(s string) (int64, error) {
 			return 0, fmt.Errorf("无法识别的值 %q", s)
 		}
 	}
-	return strconv.ParseInt(strings.ReplaceAll(s, "_", ""), 10, 64)
+	v, err := strconv.ParseInt(strings.ReplaceAll(s, "_", ""), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("整数超出范围: %q", s)
+	}
+	return v, nil
 }
 
 func isDigit(c byte) bool { return '0' <= c && c <= '9' }
