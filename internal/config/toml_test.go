@@ -128,3 +128,57 @@ func TestParseStripsBOM(t *testing.T) {
 		t.Fatalf("port = %d", n.Int)
 	}
 }
+
+func TestParseArrays(t *testing.T) {
+	root, err := Parse([]byte(`
+fallback = ["8.8.8.8:53", "119.29.29.29:53"]
+ports = [1, 2, 3]
+flags = [true]
+empty = []
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	fb := root.Table["fallback"].Arr
+	if len(fb) != 2 || fb[1].Str != "119.29.29.29:53" {
+		t.Fatalf("fallback = %+v", fb)
+	}
+	if len(root.Table["ports"].Arr) != 3 || root.Table["ports"].Arr[2].Int != 3 {
+		t.Fatalf("ports = %+v", root.Table["ports"].Arr)
+	}
+	if !root.Table["flags"].Arr[0].Bool {
+		t.Fatal("flags[0] 应为 true")
+	}
+	if len(root.Table["empty"].Arr) != 0 {
+		t.Fatal("empty 应为空数组")
+	}
+}
+
+func TestParseErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+		line string // 错误中应包含的行号
+	}{
+		{"重复键", "a = 1\na = 2\n", "重复的键", "第 2 行"},
+		{"表头未闭合", "[a\n", "表头缺少", "第 1 行"},
+		{"嵌套数组", "a = [[1]]\n", "不支持嵌套数组", "第 1 行"},
+		{"字符串未闭合", `a = "x` + "\n", "字符串未闭合", "第 1 行"},
+		{"表数组", "[[a]]\n", "不支持表数组", "第 1 行"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := Parse([]byte(c.in))
+			if err == nil {
+				t.Fatalf("期望错误，实际 nil")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v，期望包含 %q", err, c.want)
+			}
+			if !strings.Contains(err.Error(), c.line) {
+				t.Fatalf("err = %v，期望包含行号 %q", err, c.line)
+			}
+		})
+	}
+}

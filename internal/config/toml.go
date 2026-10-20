@@ -218,6 +218,8 @@ func parseValue(s string, line int) (*Node, error) {
 			return nil, fmt.Errorf("字符串后存在多余内容 %q", rest)
 		}
 		return &Node{Kind: KindString, Line: line, Str: str}, nil
+	case '[':
+		return parseArray(s, line)
 	}
 	switch s {
 	case "true":
@@ -314,4 +316,64 @@ func indexUnquoted(s string, target byte) int {
 		}
 	}
 	return -1
+}
+
+func parseArray(s string, line int) (*Node, error) {
+	if !strings.HasSuffix(s, "]") {
+		return nil, fmt.Errorf("数组缺少 ']'")
+	}
+	n := &Node{Kind: KindArray, Line: line}
+	inner := strings.TrimSpace(s[1 : len(s)-1])
+	if inner == "" {
+		return n, nil
+	}
+	for _, part := range splitTopLevel(inner, ',') {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return nil, fmt.Errorf("数组存在空元素")
+		}
+		v, err := parseValue(part, line)
+		if err != nil {
+			return nil, err
+		}
+		if v.Kind == KindArray {
+			return nil, fmt.Errorf("不支持嵌套数组")
+		}
+		n.Arr = append(n.Arr, v)
+	}
+	return n, nil
+}
+
+func splitTopLevel(s string, sep byte) []string {
+	var parts []string
+	depth := 0
+	quoted := false
+	start := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if quoted {
+			if c == '\\' {
+				i++
+				continue
+			}
+			if c == '"' {
+				quoted = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			quoted = true
+		case '[':
+			depth++
+		case ']':
+			depth--
+		case sep:
+			if depth == 0 {
+				parts = append(parts, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return append(parts, s[start:])
 }
