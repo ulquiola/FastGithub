@@ -1,6 +1,8 @@
 package certs
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"errors"
@@ -11,9 +13,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 type commandRunner func(name string, args ...string) error
+type commandOutput func(name string, args ...string) ([]byte, error)
 type fileCopier func(src, dst string) error
 type fileRemover func(path string) error
 
@@ -57,6 +61,64 @@ func install(certPath, goos string, run commandRunner, copyFile fileCopier) erro
 		return fmt.Errorf("不支持的平台 %s，请手动导入证书 %s", goos, certPath)
 	}
 	return nil
+}
+
+// TrustStatus 描述 CA 的信任安装状态。
+type TrustStatus struct {
+	Installed bool
+	Scope     string // system | user | none
+}
+
+// Status 检测 CA 是否已安装到系统或当前用户信任库。
+func Status(certPath string) (TrustStatus, error) {
+	return status(certPath, runtime.GOOS, runOutput, os.ReadFile)
+}
+
+func status(certPath, goos string, runOut commandOutput, readFile func(string) ([]byte, error)) (TrustStatus, error) {
+	switch goos {
+	case "darwin":
+		thumbprint, err := certThumbprint(certPath)
+		if err != nil {
+			return TrustStatus{}, err
+		}
+		// security find-certificate 的 -Z 是“显示哈希”而非过滤，列出 CN 后匹配 SHA-1。
+		find := func(keychain string) bool {
+			out, _ := runOut("security", "find-certificate", "-a", "-c", "FastGithub", "-Z", keychain)
+			return strings.Contains(strings.ToUpper(string(out)), thumbprint)
+		}
+		if find("/Library/Keychains/System.keychain") {
+			return TrustStatus{Installed: true, Scope: "system"}, nil
+		}
+		if userKeychain, err := loginKeychainPath(); err == nil && find(userKeychain) {
+			return TrustStatus{Installed: true, Scope: "user"}, nil
+		}
+		return TrustStatus{Scope: "none"}, nil
+	case "windows":
+		thumbprint, err := certThumbprint(certPath)
+		if err != nil {
+			return TrustStatus{}, err
+		}
+		if _, err := runOut("certutil", "-store", "Root", thumbprint); err == nil {
+			return TrustStatus{Installed: true, Scope: "system"}, nil
+		}
+		return TrustStatus{Scope: "none"}, nil
+	case "linux":
+		const dest = "/usr/local/share/ca-certificates/fastgithub.crt"
+		installed, err := readFile(dest)
+		if err != nil {
+			return TrustStatus{Scope: "none"}, nil
+		}
+		source, err := readFile(certPath)
+		if err != nil {
+			return TrustStatus{}, err
+		}
+		if bytes.Equal(installed, source) {
+			return TrustStatus{Installed: true, Scope: "system"}, nil
+		}
+		return TrustStatus{Scope: "none"}, nil
+	default:
+		return TrustStatus{}, fmt.Errorf("不支持的平台 %s", goos)
+	}
 }
 
 // Uninstall 把 CA 证书从系统信任库移除，需要管理员/root 权限。
@@ -161,7 +223,9 @@ func certThumbprint(certPath string) (string, error) {
 }
 
 func runCommand(name string, args ...string) error {
-	out, err := exec.Command(name, args...).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
 	if err != nil {
 		if msg := strings.TrimSpace(string(out)); msg != "" {
 			return fmt.Errorf("%w: %s", err, msg)
@@ -169,6 +233,13 @@ func runCommand(name string, args ...string) error {
 		return err
 	}
 	return nil
+}
+
+// runOutput 用于状态检测：钥匙串锁定时最多等待 5s，避免 UI 请求挂住。
+func runOutput(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
 func copyFile(src, dst string) error {

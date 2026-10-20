@@ -248,3 +248,74 @@ func TestDarwinUninstallSystemNeedsSudo(t *testing.T) {
 		t.Fatalf("err = %v，期望提示需要 sudo", err)
 	}
 }
+
+func TestStatus(t *testing.T) {
+	ca, err := LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sum := sha1.Sum(ca.Certificate().Raw)
+	thumb := strings.ToUpper(hex.EncodeToString(sum[:]))
+	found := func(string, ...string) ([]byte, error) {
+		return []byte("SHA-1 hash: " + thumb + "\n"), nil
+	}
+	missing := func(string, ...string) ([]byte, error) {
+		return nil, errors.New("not found")
+	}
+
+	// macOS：系统钥匙串存在。
+	st, err := status(ca.CertPath(), "darwin", found, nil)
+	if err != nil || !st.Installed || st.Scope != "system" {
+		t.Fatalf("darwin system = %+v, %v", st, err)
+	}
+	// macOS：系统没有，用户钥匙串存在。
+	calls := 0
+	st, err = status(ca.CertPath(), "darwin", func(string, ...string) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return nil, errors.New("not found")
+		}
+		return []byte("SHA-1 hash: " + thumb + "\n"), nil
+	}, nil)
+	if err != nil || !st.Installed || st.Scope != "user" {
+		t.Fatalf("darwin user = %+v, %v", st, err)
+	}
+	// macOS：都没安装。
+	st, err = status(ca.CertPath(), "darwin", missing, nil)
+	if err != nil || st.Installed || st.Scope != "none" {
+		t.Fatalf("darwin none = %+v, %v", st, err)
+	}
+
+	// Windows：certutil 成功即已安装。
+	st, err = status(ca.CertPath(), "windows", found, nil)
+	if err != nil || !st.Installed || st.Scope != "system" {
+		t.Fatalf("windows = %+v, %v", st, err)
+	}
+	st, err = status(ca.CertPath(), "windows", missing, nil)
+	if err != nil || st.Installed {
+		t.Fatalf("windows none = %+v, %v", st, err)
+	}
+
+	// Linux：文件内容一致才算安装。
+	same := func(path string) ([]byte, error) { return []byte("cert"), nil }
+	st, err = status("/tmp/ca.crt", "linux", nil, same)
+	if err != nil || !st.Installed || st.Scope != "system" {
+		t.Fatalf("linux = %+v, %v", st, err)
+	}
+	diff := func(path string) ([]byte, error) {
+		if path == "/usr/local/share/ca-certificates/fastgithub.crt" {
+			return []byte("other"), nil
+		}
+		return []byte("cert"), nil
+	}
+	st, err = status("/tmp/ca.crt", "linux", nil, diff)
+	if err != nil || st.Installed {
+		t.Fatalf("linux mismatch = %+v, %v", st, err)
+	}
+
+	if _, err := status("/tmp/ca.crt", "plan9", nil, nil); err == nil {
+		t.Fatal("不支持的平台应报错")
+	}
+}

@@ -8,33 +8,73 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header>
-    <h1>FastGithub</h1>
-    <span id="version"></span>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">FG</div>
+      <div>
+        <h1>FastGithub</h1>
+        <p id="version" class="muted">…</p>
+      </div>
+    </div>
+    <div class="top-meta">
+      <span id="session" class="pill">…</span>
+      <span class="pill live"><i></i>运行中</span>
+    </div>
   </header>
+
   <main>
-    <section class="cards">
-      <div class="card"><h2>流量</h2><p id="flow">-</p></div>
-      <div class="card"><h2>状态</h2><p id="status">-</p></div>
-      <div class="card">
-        <h2>操作</h2>
-        <button id="install-cert">安装 CA</button>
-        <button id="uninstall-cert">卸载 CA</button>
-        <button id="intercept">切换拦截</button>
+    <section class="grid">
+      <article class="card flow-card">
+        <div class="card-head"><h2>实时流量</h2></div>
+        <div class="flow-grid">
+          <div><span class="label">累计读取</span><strong id="flow-read">0 B</strong></div>
+          <div><span class="label">累计写入</span><strong id="flow-write">0 B</strong></div>
+        </div>
+        <p id="flow-rate" class="muted mono">↑ 0 B/s · ↓ 0 B/s</p>
+      </article>
+
+      <article class="card">
+        <div class="card-head"><h2>运行状态</h2></div>
+        <dl id="status-list" class="kv"></dl>
+        <button id="intercept" class="btn ghost">切换拦截</button>
+      </article>
+
+      <article class="card cert-card">
+        <div class="card-head">
+          <h2>证书信任</h2>
+          <span id="cert-status" class="badge muted">检测中…</span>
+        </div>
+        <p class="hint">安装后浏览器与 git 才会信任本地 CA。</p>
+        <div class="actions">
+          <button id="install-cert" class="btn primary">安装 CA</button>
+          <button id="uninstall-cert" class="btn danger">卸载 CA</button>
+        </div>
+        <p class="hint">macOS 非 root 时安装到当前用户钥匙串；系统级请用 sudo CLI。</p>
+      </article>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>域名规则 <span id="domain-count" class="muted"></span></h2>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>规则</th><th class="num">命中</th></tr></thead>
+          <tbody id="domains"></tbody>
+        </table>
       </div>
     </section>
-    <section>
-      <h2>域名规则</h2>
-      <table>
-        <thead><tr><th>规则</th><th>命中</th></tr></thead>
-        <tbody id="domains"></tbody>
-      </table>
-    </section>
-    <section>
-      <h2>请求日志</h2>
-      <ul id="logs"></ul>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>请求日志</h2>
+        <span class="muted">最近 1000 条</span>
+      </div>
+      <ul id="logs" class="logs"></ul>
     </section>
   </main>
+
+  <div id="toast" class="toast" hidden></div>
   <script src="/app.js"></script>
 </body>
 </html>

@@ -58,6 +58,9 @@ func newTestUIFull(t *testing.T, installs, uninstalls *int) (*Server, *certs.Aut
 		Token: "testtoken", Version: "test",
 		InstallCert:   func(string) error { *installs++; return nil },
 		UninstallCert: func(string) error { *uninstalls++; return nil },
+		CertStatus: func(string) (certs.TrustStatus, error) {
+			return certs.TrustStatus{Installed: true, Scope: "user"}, nil
+		},
 	})
 	return s, ca
 }
@@ -312,5 +315,22 @@ func TestUninstallCertRejectsGet(t *testing.T) {
 	s.Handler().ServeHTTP(rec, localRequest(http.MethodGet, "/api/cert/uninstall"))
 	if rec.Code != http.StatusMethodNotAllowed || uninstalls != 0 {
 		t.Fatalf("status=%d uninstalls=%d", rec.Code, uninstalls)
+	}
+}
+
+func TestCertStatusEndpoint(t *testing.T) {
+	var installs, uninstalls int
+	s, _ := newTestUIFull(t, &installs, &uninstalls)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, localRequest(http.MethodGet, "/api/cert/status", nil))
+	var body struct {
+		Installed bool   `json:"installed"`
+		Scope     string `json:"scope"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK || !body.Installed || body.Scope != "user" {
+		t.Fatalf("status=%d body=%+v", rec.Code, body)
 	}
 }

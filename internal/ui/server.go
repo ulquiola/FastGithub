@@ -31,6 +31,7 @@ type Options struct {
 	Version       string
 	InstallCert   func(string) error
 	UninstallCert func(string) error
+	CertStatus    func(string) (certs.TrustStatus, error)
 }
 
 // Server 提供内嵌页面、REST、SSE 与兼容端点。
@@ -46,6 +47,9 @@ func New(opts Options) *Server {
 	if opts.UninstallCert == nil {
 		opts.UninstallCert = certs.Uninstall
 	}
+	if opts.CertStatus == nil {
+		opts.CertStatus = certs.Status
+	}
 	s := &Server{opts: opts, mux: http.NewServeMux()}
 	s.mux.HandleFunc("/", s.index)
 	s.mux.HandleFunc("/app.js", staticAsset("assets/app.js", "application/javascript; charset=utf-8"))
@@ -54,6 +58,7 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("/api/domains", s.domains)
 	s.mux.HandleFunc("/api/logs", s.logs)
 	s.mux.HandleFunc("/api/cert", s.cert)
+	s.mux.HandleFunc("/api/cert/status", s.certStatus)
 	s.mux.HandleFunc("/api/cert/install", s.installCert)
 	s.mux.HandleFunc("/api/cert/uninstall", s.uninstallCert)
 	s.mux.HandleFunc("/api/intercept", s.intercept)
@@ -230,6 +235,18 @@ func (s *Server) cert(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-pem-file")
 	w.Header().Set("Content-Disposition", "attachment; filename=fastgithub.crt")
 	w.Write(s.opts.CA.CertPEM())
+}
+
+func (s *Server) certStatus(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
+	status, err := s.opts.CertStatus(s.opts.CA.CertPath())
+	if err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"installed": status.Installed, "scope": status.Scope})
 }
 
 func (s *Server) installCert(w http.ResponseWriter, r *http.Request) {
