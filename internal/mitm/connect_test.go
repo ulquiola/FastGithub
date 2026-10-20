@@ -58,19 +58,19 @@ func TestReadConnectRejectsLongSingleLine(t *testing.T) {
 	}
 }
 
-type countingReader struct {
+type countingSource struct {
 	r io.Reader
 	n int
 }
 
-func (c *countingReader) Read(p []byte) (int, error) {
+func (c *countingSource) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
 	c.n += n
 	return n, err
 }
 
 func TestReadConnectBoundsSingleLineRead(t *testing.T) {
-	src := &countingReader{r: strings.NewReader("CONNECT example.com:443 HTTP/1.1\r\n" + strings.Repeat("A", 1<<20))}
+	src := &countingSource{r: strings.NewReader("CONNECT example.com:443 HTTP/1.1\r\n" + strings.Repeat("A", 1<<20))}
 	br := bufio.NewReaderSize(src, maxConnectHeader+1)
 	if _, _, err := ReadConnect(br); err == nil {
 		t.Fatal("超长单行应被拒绝")

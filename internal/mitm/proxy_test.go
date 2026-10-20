@@ -20,6 +20,7 @@ import (
 	"fastgithub-go/internal/certs"
 	"fastgithub-go/internal/config"
 	"fastgithub-go/internal/dialer"
+	"fastgithub-go/internal/flow"
 )
 
 type staticResolver struct{}
@@ -333,5 +334,114 @@ func TestServerDestinationSNI(t *testing.T) {
 	}
 	if sni := <-sniCh; sni != "fonts.geekzu.org" {
 		t.Fatalf("上游 SNI = %q，期望 destination host", sni)
+	}
+}
+
+type captureLogger struct {
+	entries chan flow.Entry
+}
+
+func newCaptureLogger() *captureLogger {
+	return &captureLogger{entries: make(chan flow.Entry, 8)}
+}
+
+func (l *captureLogger) Log(e flow.Entry) { l.entries <- e }
+
+func TestReverseProxyLogging(t *testing.T) {
+	store := testStore(t, map[string]*config.Domain{"example.com": {}})
+	logger := newCaptureLogger()
+	rp := NewReverseProxy(store, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: 200,
+			Header:     http.Header{},
+			Body:       io.NopCloser(strings.NewReader("hello:" + string(body))),
+		}, nil
+	}))
+	rp.SetLogger(logger)
+	req := httptest.NewRequest(http.MethodPost, "https://example.com/x", strings.NewReader("abc"))
+	req.Host = "example.com"
+	rp.ServeHTTP(httptest.NewRecorder(), req)
+
+	select {
+	case e := <-logger.entries:
+		if e.Domain != "example.com" || e.Method != http.MethodPost || e.Status != 200 {
+			t.Fatalf("entry = %+v", e)
+		}
+		if e.Read != 3 || e.Write != int64(len("hello:abc")) {
+			t.Fatalf("bytes = %d/%d", e.Read, e.Write)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("未记录日志")
+	}
+}
+
+func TestTunnelLogging(t *testing.T) {
+	server, _ := newTestServer(t, map[string]*config.Domain{})
+	logger := newCaptureLogger()
+	server.SetLogger(logger)
+	proxyAddr := startProxy(t, server)
+
+	echoLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echoLn.Close()
+	go func() {
+		conn, err := echoLn.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		io.Copy(conn, conn)
+	}()
+
+	conn, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintf(conn, "CONNECT 127.0.0.1:%d HTTP/1.1\r\nHost: x\r\n\r\n", echoLn.Addr().(*net.TCPAddr).Port)
+	br := bufio.NewReader(conn)
+	if _, err := http.ReadResponse(br, nil); err != nil {
+		t.Fatal(err)
+	}
+	conn.Write([]byte("hi"))
+	buf := make([]byte, 2)
+	if _, err := io.ReadFull(br, buf); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+
+	select {
+	case e := <-logger.entries:
+		if e.Method != "CONNECT" || e.Domain != "127.0.0.1" || e.Read < 2 || e.Write < 2 {
+			t.Fatalf("entry = %+v", e)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("未记录隧道日志")
+	}
+}
+
+func TestFlowStatisticsHandler(t *testing.T) {
+	server, _ := newTestServer(t, map[string]*config.Domain{})
+	server.SetStats(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"TotalRead":1,"TotalWrite":2,"ReadRate":0,"WriteRate":0}`)
+	}))
+	proxyAddr := startProxy(t, server)
+	resp, err := http.Get("http://" + proxyAddr + "/flowStatistics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"TotalRead":1`) {
+		t.Fatalf("body = %s", body)
 	}
 }

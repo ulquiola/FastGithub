@@ -13,6 +13,7 @@ import (
 	"fastgithub-go/internal/certs"
 	"fastgithub-go/internal/config"
 	"fastgithub-go/internal/dialer"
+	"fastgithub-go/internal/flow"
 )
 
 const defaultTunnelIdle = 5 * time.Minute
@@ -26,6 +27,8 @@ type Server struct {
 	ca      *certs.Authority
 	reverse http.Handler
 	idle    time.Duration
+	logger  Logger
+	stats   http.Handler
 }
 
 func NewServer(store *config.Store, d *dialer.Dialer, ca *certs.Authority, reverse http.Handler, idle time.Duration) *Server {
@@ -34,6 +37,12 @@ func NewServer(store *config.Store, d *dialer.Dialer, ca *certs.Authority, rever
 	}
 	return &Server{store: store, dialer: d, ca: ca, reverse: reverse, idle: idle}
 }
+
+// SetLogger 设置请求日志接收器。
+func (s *Server) SetLogger(l Logger) { s.logger = l }
+
+// SetStats 设置 /flowStatistics 的处理器。
+func (s *Server) SetStats(h http.Handler) { s.stats = h }
 
 // ServeConn 根据连接首字节分派 CONNECT、透明 TLS 或普通 HTTP。
 func (s *Server) ServeConn(ctx context.Context, conn net.Conn) {
@@ -61,6 +70,10 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) {
 // ServeHTTP 处理 38457 上的普通 HTTP：根路径返回 PAC，绝对 URI 走反向代理。
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !r.URL.IsAbs() {
+		if r.URL.Path == "/flowStatistics" && s.stats != nil {
+			s.stats.ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path == "/" {
 			host := r.Host
 			if host == "" {
@@ -110,7 +123,18 @@ func (s *Server) serveConnect(ctx context.Context, conn net.Conn, br *bufio.Read
 		conn.Close()
 		return
 	}
-	Tunnel(ctx, client, upstream, s.idle)
+	start := time.Now()
+	clientCount := &countingConn{Conn: client}
+	upstreamCount := &countingConn{Conn: upstream}
+	Tunnel(ctx, clientCount, upstreamCount, s.idle)
+	if s.logger != nil {
+		s.logger.Log(flow.Entry{
+			Time: time.Now(), Domain: host, Method: "CONNECT", Status: http.StatusOK,
+			Duration: time.Since(start),
+			Read:     clientCount.read.Load() + upstreamCount.read.Load(),
+			Write:    clientCount.write.Load() + upstreamCount.write.Load(),
+		})
+	}
 }
 
 func (s *Server) serveMITM(ctx context.Context, conn net.Conn, connectHost string) {

@@ -6,21 +6,38 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"fastgithub-go/internal/config"
+	"fastgithub-go/internal/flow"
 )
 
 // ReverseProxy 按域名规则转发请求，支持短路响应与 Destination 改写。
 type ReverseProxy struct {
 	store     *config.Store
 	transport http.RoundTripper
+	logger    Logger
 }
 
 func NewReverseProxy(store *config.Store, transport http.RoundTripper) *ReverseProxy {
 	return &ReverseProxy{store: store, transport: transport}
 }
 
+// SetLogger 设置请求日志接收器。
+func (p *ReverseProxy) SetLogger(l Logger) { p.logger = l }
+
+func (p *ReverseProxy) log(host, method string, status int, start time.Time, read, write int64) {
+	if p.logger == nil {
+		return
+	}
+	p.logger.Log(flow.Entry{
+		Time: time.Now(), Domain: host, Method: method, Status: status,
+		Duration: time.Since(start), Read: read, Write: write,
+	})
+}
+
 func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	host := r.Host
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
@@ -28,6 +45,7 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	domain, matched := p.store.Lookup(host)
 	if matched && domain.Response != nil {
 		writeShortCircuit(w, domain.Response)
+		p.log(host, r.Method, domain.Response.Status, start, 0, int64(len(domain.Response.Content)))
 		return
 	}
 
@@ -50,6 +68,7 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	prefix, err := config.JoinDestination(scheme, upstreamHost, destination)
 	if err != nil {
 		http.Error(w, "无效的 destination: "+err.Error(), http.StatusBadGateway)
+		p.log(host, r.Method, http.StatusBadGateway, start, 0, 0)
 		return
 	}
 
@@ -72,10 +91,13 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	out.RequestURI = ""
 	out.Host = r.Host
 	removeHopByHop(out.Header)
+	requestBody := &countingReader{r: out.Body}
+	out.Body = requestBody
 
 	resp, err := p.transport.RoundTrip(out)
 	if err != nil {
 		http.Error(w, "上游请求失败: "+err.Error(), http.StatusBadGateway)
+		p.log(host, r.Method, http.StatusBadGateway, start, requestBody.n.Load(), 0)
 		return
 	}
 	defer resp.Body.Close()
@@ -86,7 +108,9 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	responseBody := &countingWriter{ResponseWriter: w}
+	io.Copy(responseBody, resp.Body)
+	p.log(host, r.Method, resp.StatusCode, start, requestBody.n.Load(), responseBody.n.Load())
 }
 
 func writeShortCircuit(w http.ResponseWriter, resp *config.Response) {
