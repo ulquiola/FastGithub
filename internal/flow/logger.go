@@ -1,0 +1,60 @@
+package flow
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+)
+
+// Logger 把请求日志写入环形缓冲、流量统计与可选文件。
+type Logger struct {
+	ring    *Ring
+	tracker *Tracker
+
+	mu   sync.Mutex
+	file *os.File
+}
+
+func NewLogger(ring *Ring, tracker *Tracker, filePath string) (*Logger, error) {
+	l := &Logger{ring: ring, tracker: tracker}
+	if filePath == "" {
+		return l, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		return nil, fmt.Errorf("创建日志目录失败: %w", err)
+	}
+	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("打开日志文件 %s 失败: %w", filePath, err)
+	}
+	l.file = file
+	return l, nil
+}
+
+// Log 记录一条请求日志。
+func (l *Logger) Log(e Entry) {
+	if e.Time.IsZero() {
+		e.Time = time.Now()
+	}
+	if l.ring != nil {
+		l.ring.Add(e)
+	}
+	if l.tracker != nil {
+		l.tracker.Add(e.Read, e.Write)
+	}
+	if l.file != nil {
+		l.mu.Lock()
+		fmt.Fprintf(l.file, "%s %s %s %d %s %d %d\n",
+			e.Time.Format(time.RFC3339), e.Domain, e.Method, e.Status, e.Duration, e.Read, e.Write)
+		l.mu.Unlock()
+	}
+}
+
+func (l *Logger) Close() error {
+	if l.file == nil {
+		return nil
+	}
+	return l.file.Close()
+}
