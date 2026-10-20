@@ -200,3 +200,48 @@ func TestUninstallWindowsNotFoundIsIdempotent(t *testing.T) {
 		t.Fatalf("证书不存在时应视为成功: %v", err)
 	}
 }
+
+func TestDarwinInstallFallsBackToAuthorizationPrompt(t *testing.T) {
+	var calls []commandCall
+	run := func(name string, args ...string) error {
+		calls = append(calls, commandCall{name, args})
+		if name == "security" {
+			return errors.New("SecTrustSettingsSetTrustSettings: The authorization was denied.")
+		}
+		return nil
+	}
+	if err := install("/tmp/ca.crt", "darwin", run, func(string, string) error { return nil }); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if len(calls) != 2 || calls[1].name != "osascript" || len(calls[1].args) != 2 {
+		t.Fatalf("calls = %#v", calls)
+	}
+	script := calls[1].args[1]
+	if !strings.Contains(script, "with administrator privileges") || !strings.Contains(script, "add-trusted-cert") {
+		t.Fatalf("script = %q", script)
+	}
+}
+
+func TestDarwinUninstallFallsBackToAuthorizationPrompt(t *testing.T) {
+	ca, err := LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []commandCall
+	run := func(name string, args ...string) error {
+		calls = append(calls, commandCall{name, args})
+		if name == "security" {
+			return errors.New("The authorization was denied.")
+		}
+		return nil
+	}
+	if err := uninstall(ca.CertPath(), "darwin", run, func(string) error { return nil }); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if len(calls) != 2 || calls[1].name != "osascript" {
+		t.Fatalf("calls = %#v", calls)
+	}
+	if !strings.Contains(calls[1].args[1], "delete-certificate") {
+		t.Fatalf("script = %q", calls[1].args[1])
+	}
+}

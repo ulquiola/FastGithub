@@ -28,9 +28,16 @@ func install(certPath, goos string, run commandRunner, copyFile fileCopier) erro
 			return fmt.Errorf("certutil 导入失败（可能需要管理员权限）: %w", err)
 		}
 	case "darwin":
-		if err := run("security", "add-trusted-cert", "-d", "-r", "trustRoot",
-			"-k", "/Library/Keychains/System.keychain", certPath); err != nil {
-			return fmt.Errorf("security 导入失败（可能需要 sudo）: %w", err)
+		args := []string{"add-trusted-cert", "-d", "-r", "trustRoot",
+			"-k", "/Library/Keychains/System.keychain", certPath}
+		if err := run("security", args...); err != nil {
+			if !isAuthError(err) {
+				return fmt.Errorf("security 导入失败: %w", err)
+			}
+			// 普通用户进程无法直接写系统钥匙串，弹系统授权对话框重试。
+			if err := run("osascript", "-e", appleScriptFor("/usr/bin/security", args...)); err != nil {
+				return fmt.Errorf("security 导入失败（授权被取消或不可用）: %w", err)
+			}
 		}
 	case "linux":
 		const dest = "/usr/local/share/ca-certificates/fastgithub.crt"
@@ -69,12 +76,18 @@ func uninstall(certPath, goos string, run commandRunner, remove fileRemover) err
 		if err != nil {
 			return err
 		}
-		if err := run("security", "delete-certificate", "-Z", thumbprint, "-t",
-			"/Library/Keychains/System.keychain"); err != nil {
+		args := []string{"delete-certificate", "-Z", thumbprint, "-t",
+			"/Library/Keychains/System.keychain"}
+		if err := run("security", args...); err != nil {
 			if isNotFound(err) {
 				return nil
 			}
-			return fmt.Errorf("security 删除失败（可能需要 sudo）: %w", err)
+			if !isAuthError(err) {
+				return fmt.Errorf("security 删除失败: %w", err)
+			}
+			if err := run("osascript", "-e", appleScriptFor("/usr/bin/security", args...)); err != nil {
+				return fmt.Errorf("security 删除失败（授权被取消或不可用）: %w", err)
+			}
 		}
 	case "linux":
 		const dest = "/usr/local/share/ca-certificates/fastgithub.crt"
@@ -88,6 +101,35 @@ func uninstall(certPath, goos string, run commandRunner, remove fileRemover) err
 		return fmt.Errorf("不支持的平台 %s，请手动移除证书 %s", goos, certPath)
 	}
 	return nil
+}
+
+func isAuthError(err error) bool {
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"authorization", "denied", "not permitted", "operation not permitted",
+		"must be run as root", "sudo",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// appleScriptFor 生成带管理员权限的 do shell script，命令参数做 shell 与 AppleScript 双重转义。
+func appleScriptFor(name string, args ...string) string {
+	parts := []string{name}
+	for _, arg := range args {
+		parts = append(parts, shellQuote(arg))
+	}
+	command := strings.Join(parts, " ")
+	command = strings.ReplaceAll(command, `\`, `\\`)
+	command = strings.ReplaceAll(command, `"`, `\"`)
+	return `do shell script "` + command + `" with administrator privileges`
+}
+
+func shellQuote(s string) string {
+	return `'` + strings.ReplaceAll(s, `'`, `'\''`) + `'`
 }
 
 func isNotFound(err error) bool {
