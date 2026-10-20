@@ -16,12 +16,11 @@ type testRecord struct {
 	target string
 }
 
-// buildTestResponse 构造响应报文；同名记录使用压缩指针，CNAME 目标也可被后续记录引用。
-func buildTestResponse(t *testing.T, id uint16, qname string, qtype uint16, recs []testRecord, rcode int) []byte {
-	t.Helper()
+// buildResponse 构造响应报文；同名记录使用压缩指针，CNAME 目标也可被后续记录引用。
+func buildResponse(id uint16, qname string, qtype uint16, recs []testRecord, rcode int) ([]byte, error) {
 	labels, err := splitName(qname)
 	if err != nil {
-		t.Fatalf("splitName: %v", err)
+		return nil, err
 	}
 	buf := make([]byte, 12)
 	binary.BigEndian.PutUint16(buf[0:2], id)
@@ -46,7 +45,7 @@ func buildTestResponse(t *testing.T, id uint16, qname string, qtype uint16, recs
 			offsets[key] = len(buf)
 			ls, err := splitName(rec.name)
 			if err != nil {
-				t.Fatalf("splitName(%q): %v", rec.name, err)
+				return nil, err
 			}
 			for _, label := range ls {
 				buf = append(buf, byte(len(label)))
@@ -67,7 +66,7 @@ func buildTestResponse(t *testing.T, id uint16, qname string, qtype uint16, recs
 		case typeCNAME:
 			ls, err := splitName(rec.target)
 			if err != nil {
-				t.Fatalf("splitName(%q): %v", rec.target, err)
+				return nil, err
 			}
 			for _, label := range ls {
 				rdata = append(rdata, byte(len(label)))
@@ -79,32 +78,51 @@ func buildTestResponse(t *testing.T, id uint16, qname string, qtype uint16, recs
 		buf = binary.BigEndian.AppendUint16(buf, uint16(len(rdata)))
 		buf = append(buf, rdata...)
 	}
-	return buf
+	return buf, nil
 }
 
-// makeResponseForQuery 按查询的 ID/问题构造响应，ips 用于生成与问题同类型的记录。
-func makeResponseForQuery(t *testing.T, query []byte, ips []string, ttl uint32, rcode int) []byte {
+func buildTestResponse(t *testing.T, id uint16, qname string, qtype uint16, recs []testRecord, rcode int) []byte {
 	t.Helper()
-	m, err := parseMessage(query)
+	resp, err := buildResponse(id, qname, qtype, recs, rcode)
 	if err != nil {
-		t.Fatalf("parseMessage(query): %v", err)
+		t.Fatalf("buildResponse: %v", err)
 	}
-	if len(m.Questions) == 0 {
-		t.Fatal("查询缺少问题段")
+	return resp
+}
+
+// responseForQuery 供 HTTP/TCP 处理协程使用：失败时返回 nil，不调用 t.Fatal。
+func responseForQuery(query []byte, ips []string, ttl uint32, rcode int) []byte {
+	m, err := parseMessage(query)
+	if err != nil || len(m.Questions) == 0 {
+		return nil
 	}
 	q := m.Questions[0]
 	recs := make([]testRecord, 0, len(ips))
 	for _, raw := range ips {
 		ip := net.ParseIP(raw)
 		if ip == nil {
-			t.Fatalf("非法 IP %q", raw)
+			return nil
 		}
 		recs = append(recs, testRecord{name: q.Name, typ: q.Type, ttl: ttl, ip: ip})
 	}
-	return buildTestResponse(t, m.ID, q.Name, q.Type, recs, rcode)
+	resp, err := buildResponse(m.ID, q.Name, q.Type, recs, rcode)
+	if err != nil {
+		return nil
+	}
+	return resp
 }
 
-// startTCPDNS 启动一个循环应答的 TCP DNS 服务器；respond 返回 nil 表示关闭连接。
+// makeResponseForQuery 在测试主协程使用，失败即终止。
+func makeResponseForQuery(t *testing.T, query []byte, ips []string, ttl uint32, rcode int) []byte {
+	t.Helper()
+	resp := responseForQuery(query, ips, ttl, rcode)
+	if resp == nil {
+		t.Fatalf("构造响应失败: % x", query)
+	}
+	return resp
+}
+
+// startTCPDNS 启动一个循环应答的 TCP DNS 服务器。
 func startTCPDNS(t *testing.T, respond func(query []byte) []byte) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
