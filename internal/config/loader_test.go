@@ -1,8 +1,11 @@
 package config
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -84,6 +87,89 @@ func TestDiscoverExplicit(t *testing.T) {
 	}
 	if want := filepath.Join(dir, "conf.d"); gotDir != want {
 		t.Fatalf("confDir = %q, want %q", gotDir, want)
+	}
+}
+
+// Discover 内的 stat 以参数注入：Windows 上无法在不改 ACL 的前提下构造
+// “本地配置存在但 stat 失败”，这里用真实错误类型覆盖该分支。
+func TestDiscoverKeepsLocalConfigOnNonNotExistError(t *testing.T) {
+	cases := []struct {
+		name    string
+		statErr error
+	}{
+		{"权限不足", fs.ErrPermission},
+		{"IO 错误", errors.New("设备未就绪")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			main, confDir, err := discover("", func(string) (fs.FileInfo, error) {
+				return nil, &fs.PathError{Op: "stat", Path: "fastgithub.toml", Err: tc.statErr}
+			})
+			if err != nil {
+				t.Fatalf("discover: %v", err)
+			}
+			wantMain, err := filepath.Abs("fastgithub.toml")
+			if err != nil {
+				t.Fatalf("Abs: %v", err)
+			}
+			if main != wantMain {
+				t.Fatalf("mainPath = %q，非 NotExist 的 stat 错误不应静默改用用户配置目录，期望 %q", main, wantMain)
+			}
+			if wantDir := filepath.Join(filepath.Dir(wantMain), "conf.d"); confDir != wantDir {
+				t.Fatalf("confDir = %q, want %q", confDir, wantDir)
+			}
+		})
+	}
+}
+
+func TestDiscoverFallsBackToUserConfigWhenNoLocal(t *testing.T) {
+	main, confDir, err := discover("", func(string) (fs.FileInfo, error) {
+		return nil, &fs.PathError{Op: "stat", Path: "fastgithub.toml", Err: fs.ErrNotExist}
+	})
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	base, err := os.UserConfigDir()
+	if err != nil {
+		t.Skipf("本环境无法定位用户配置目录: %v", err)
+	}
+	if want := filepath.Join(base, "fastgithub", "fastgithub.toml"); main != want {
+		t.Fatalf("mainPath = %q, want %q", main, want)
+	}
+	if want := filepath.Join(base, "fastgithub", "conf.d"); confDir != want {
+		t.Fatalf("confDir = %q, want %q", confDir, want)
+	}
+}
+
+func TestFingerprintWrapsConfDirError(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("非 Windows 下“<”不是非法路径字符，无法触发非 NotExist 的 ReadDir 错误")
+	}
+	dir := t.TempDir()
+	main := filepath.Join(dir, "fastgithub.toml")
+	write(t, main, "[server]\nproxy_port = 40000\n")
+	// Windows 下 “<” 是非法路径字符，ReadDir 返回 ERROR_INVALID_NAME（非 NotExist），
+	// 用它覆盖 conf.d 读取失败时的中文包装；权限类失败需改 ACL，测试里不做。
+	badConf := filepath.Join(dir, "bad<name")
+
+	_, err := Fingerprint(main, badConf)
+	if err == nil {
+		t.Fatal("conf.d 读取失败时应报错")
+	}
+	if got := err.Error(); !contains(got, "读取") || !contains(got, badConf) {
+		t.Fatalf("err = %v，期望包含中文上下文与路径", got)
+	}
+}
+
+func TestFingerprintWrapsReadError(t *testing.T) {
+	dir := t.TempDir()
+
+	_, err := Fingerprint(dir, "")
+	if err == nil {
+		t.Fatal("主配置是目录时应报错")
+	}
+	if got := err.Error(); !contains(got, "读取") || !contains(got, dir) {
+		t.Fatalf("err = %v，期望包含中文上下文与路径", got)
 	}
 }
 

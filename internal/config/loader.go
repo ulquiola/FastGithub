@@ -4,25 +4,36 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 )
 
+// localConfigName 是当前目录下的主配置文件名。
+const localConfigName = "fastgithub.toml"
+
 // Discover 定位主配置与 conf.d 目录：显式路径优先，其次当前目录，最后用户配置目录。
 func Discover(explicit string) (mainPath, confDir string, err error) {
+	return discover(explicit, os.Stat)
+}
+
+// discover 实现 Discover；stat 可注入以便测试当前目录配置的探测分支。
+func discover(explicit string, stat func(string) (fs.FileInfo, error)) (mainPath, confDir string, err error) {
 	if explicit != "" {
 		abs, err := filepath.Abs(explicit)
 		if err != nil {
-			return "", "", err
+			return "", "", fmt.Errorf("解析配置路径 %s 失败: %w", explicit, err)
 		}
 		return abs, filepath.Join(filepath.Dir(abs), "conf.d"), nil
 	}
-	if _, statErr := os.Stat("fastgithub.toml"); statErr == nil {
-		abs, err := filepath.Abs("fastgithub.toml")
+	// 只有“不存在”才表示没有本地配置。权限不足、ACL、IO 错误等仍选本地路径，
+	// 由 Load 报出明确的读取错误，而不是静默改用用户配置目录里的另一份配置。
+	if _, statErr := stat(localConfigName); statErr == nil || !os.IsNotExist(statErr) {
+		abs, err := filepath.Abs(localConfigName)
 		if err != nil {
-			return "", "", err
+			return "", "", fmt.Errorf("解析配置路径 %s 失败: %w", localConfigName, err)
 		}
 		return abs, filepath.Join(filepath.Dir(abs), "conf.d"), nil
 	}
@@ -31,7 +42,7 @@ func Discover(explicit string) (mainPath, confDir string, err error) {
 		return "", "", fmt.Errorf("无法定位配置目录: %w", err)
 	}
 	dir := filepath.Join(base, "fastgithub")
-	return filepath.Join(dir, "fastgithub.toml"), filepath.Join(dir, "conf.d"), nil
+	return filepath.Join(dir, localConfigName), filepath.Join(dir, "conf.d"), nil
 }
 
 // Load 读取主配置与 conf.d 下的 TOML 片段（按文件名升序合并）。
@@ -83,7 +94,7 @@ func Fingerprint(mainPath, confDir string) (string, error) {
 	paths := []string{mainPath}
 	entries, err := os.ReadDir(confDir)
 	if err != nil && !os.IsNotExist(err) {
-		return "", err
+		return "", fmt.Errorf("读取 %s 失败: %w", confDir, err)
 	}
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".toml") {
@@ -96,7 +107,7 @@ func Fingerprint(mainPath, confDir string) (string, error) {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return "", err
+			return "", fmt.Errorf("读取 %s 失败: %w", p, err)
 		}
 		h.Write([]byte(p))
 		h.Write(data)
