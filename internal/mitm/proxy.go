@@ -41,6 +41,16 @@ func NewServer(store *config.Store, d *dialer.Dialer, ca *certs.Authority, rever
 // SetLogger 设置请求日志接收器。
 func (s *Server) SetLogger(l Logger) { s.logger = l }
 
+// ServeTLS 处理已接受的透明 TLS 连接（443 入口）。
+func (s *Server) ServeTLS(ctx context.Context, conn net.Conn) {
+	s.serveTransparentTLS(ctx, conn)
+}
+
+// ServeHTTPConn 处理已接受的明文 HTTP 连接（80 入口）。
+func (s *Server) ServeHTTPConn(ctx context.Context, conn net.Conn) {
+	s.serveOneHTTP(conn, s.reverse)
+}
+
 // SetStats 设置 /flowStatistics 的处理器。
 func (s *Server) SetStats(h http.Handler) { s.stats = h }
 

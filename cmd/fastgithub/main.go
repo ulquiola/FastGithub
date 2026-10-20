@@ -8,11 +8,13 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"fastgithub-go/internal/app"
 	"fastgithub-go/internal/certs"
 	"fastgithub-go/internal/config"
+	"fastgithub-go/internal/intercept"
 )
 
 const usage = `用法: fastgithub <命令>
@@ -20,7 +22,12 @@ const usage = `用法: fastgithub <命令>
 命令:
   config validate [--path 文件]        校验配置
   install-cert [--dir 目录]            生成 CA 并加入系统信任库（需管理员/root）
-  run [--path 文件]                    启动 38457 显式代理
+  install                              安装系统服务（需管理员/root）
+  uninstall                            卸载系统服务
+  start                                启动系统服务
+  stop                                 停止系统服务
+  run [--path 文件]                    启动 38457 显式代理与 UI
+  windivert-selftest                   打印 WinDivert 地址/DNS 自检
   version                              打印版本信息
 `
 
@@ -56,6 +63,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "run":
 		if err := runRun(args[1:], stdout); err != nil {
+			fmt.Fprintln(stderr, "错误: "+err.Error())
+			return 1
+		}
+		return 0
+	case "windivert-selftest":
+		if len(args) != 1 {
+			return usageError(stderr)
+		}
+		fmt.Fprint(stdout, intercept.SelfTestText())
+		return 0
+	case "install", "uninstall", "start", "stop":
+		if len(args) != 1 {
+			return usageError(stderr)
+		}
+		if err := runServiceCommand(args[0]); err != nil {
 			fmt.Fprintln(stderr, "错误: "+err.Error())
 			return 1
 		}
@@ -121,6 +143,25 @@ func runInstallCert(args []string, stdout io.Writer) error {
 	return nil
 }
 
+func runServiceCommand(command string) error {
+	switch command {
+	case "install":
+		exe, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("定位可执行文件失败: %w", err)
+		}
+		return app.InstallService(exe)
+	case "uninstall":
+		return app.UninstallService()
+	case "start":
+		return app.StartService()
+	case "stop":
+		return app.StopService()
+	default:
+		return fmt.Errorf("未知服务命令 %s", command)
+	}
+}
+
 func runRun(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -142,6 +183,10 @@ func runRun(args []string, stdout io.Writer) error {
 	store, err := config.NewStore(cfg)
 	if err != nil {
 		return err
+	}
+	// 服务以绝对路径启动时，让 cacert/ui.token/logs 落在配置目录旁。
+	if err := os.Chdir(filepath.Dir(mainPath)); err != nil {
+		return fmt.Errorf("切换到配置目录失败: %w", err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -504,4 +504,5 @@ fastgithub-go/
 - IPv6 上游：原版按 `OSSupportsIPv6` 决定是否查 AAAA；Go 版默认查，可配置关闭。
 - 是否在内置 DoH 之外保留"外挂 dnscrypt-proxy"兼容开关：暂不做，配置里出现 `dnscrypt` 键会报错。
 - 性能基准（并发连接数、单连接吞吐）在 M3 补 `go test -bench`。
+- **透明 22/9418 转发语义（M3 前确认）**：当前 DNS 只把命中域名指向回环，listener 无法从连接恢复原始域名；原版如何为 SSH/git 协议选择上游需对照源码确认。当前显式代理与 443/80 MITM 不受影响。
 - **`@ipaddress` 展开为 IP 字面量作 SNI 的语义（M1-D 已确认）**：Go 与 .NET 对 IP 字面量都不发送 SNI（RFC 6066），实际等价于"不发 SNI"。`dialer_test.go` 用假 TLS 服务器断言 `@ipaddress` 的 `ClientHello.ServerName` 为空；若将来确需发送 IP 字面量 SNI，标准库不支持，需自定义 ClientHello，成本较高。

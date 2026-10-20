@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -85,6 +86,12 @@ func serve(ctx context.Context, cfg *config.Config, store *config.Store, proxyLn
 	uiHTTP := &http.Server{Handler: uiServer.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go uiHTTP.Serve(uiLn)
 	defer uiHTTP.Close()
+
+	cleanupTransparent, err := startTransparent(ctx, server, store, cfg)
+	if err != nil {
+		log.Printf("透明拦截未启用: %v", err)
+	}
+	defer cleanupTransparent()
 
 	if ready != nil {
 		ready(proxyLn.Addr(), uiLn.Addr())

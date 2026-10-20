@@ -139,3 +139,22 @@ func TestRunRunUsage(t *testing.T) {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
 }
+
+func TestRunSelfTest(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"windivert-selftest"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "WinDivert") || !strings.Contains(stdout.String(), "github.com A -> 127.0.0.1") {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestServiceCommandsRejectExtraArgs(t *testing.T) {
+	for _, cmd := range []string{"install", "uninstall", "start", "stop"} {
+		var stdout, stderr bytes.Buffer
+		if code := run([]string{cmd, "extra"}, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "用法") {
+			t.Fatalf("%s exit=%d stderr=%q", cmd, code, stderr.String())
+		}
+	}
+}
