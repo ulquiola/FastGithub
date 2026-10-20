@@ -35,6 +35,7 @@ func newTable(line int) *Node {
 
 // Parse 解析 TOML 子集：表头、键值、字符串、整数、布尔、数组与 # 注释。
 func Parse(data []byte) (*Node, error) {
+	data = bytes.TrimPrefix(data, []byte("\xEF\xBB\xBF"))
 	root := newTable(1)
 	p := &parser{src: data, line: 1, table: root, root: root}
 	if err := p.run(); err != nil {
@@ -84,6 +85,24 @@ func (p *parser) nextLine() (string, int, bool) {
 }
 
 func (p *parser) parseLine(text string, line int) error {
+	if text[0] == '[' {
+		if strings.HasPrefix(text, "[[") {
+			return fmt.Errorf("不支持表数组 [[...]]")
+		}
+		if !strings.HasSuffix(text, "]") {
+			return fmt.Errorf("表头缺少 ']'")
+		}
+		path, err := parseKeyPath(strings.TrimSpace(text[1 : len(text)-1]))
+		if err != nil {
+			return err
+		}
+		table, err := p.walk(path, line)
+		if err != nil {
+			return err
+		}
+		p.table = table
+		return nil
+	}
 	eq := indexUnquoted(text, '=')
 	if eq < 0 {
 		return fmt.Errorf("缺少 '='")
@@ -97,6 +116,22 @@ func (p *parser) parseLine(text string, line int) error {
 		return err
 	}
 	return p.set(p.table, path, val)
+}
+
+func (p *parser) walk(path []string, line int) (*Node, error) {
+	t := p.root
+	for _, seg := range path {
+		next, ok := t.Table[seg]
+		if !ok {
+			next = newTable(line)
+			t.Table[seg] = next
+		}
+		if next.Kind != KindTable {
+			return nil, fmt.Errorf("键 %q 已被定义为值，不能作为表", seg)
+		}
+		t = next
+	}
+	return t, nil
 }
 
 func (p *parser) set(t *Node, path []string, val *Node) error {
@@ -160,6 +195,11 @@ func parseKeyPath(key string) ([]string, error) {
 	}
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("缺少键名")
+	}
+	for _, part := range parts {
+		if part == "" {
+			return nil, fmt.Errorf("键名不能为空段")
+		}
 	}
 	return parts, nil
 }
