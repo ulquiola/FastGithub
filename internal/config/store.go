@@ -16,6 +16,13 @@ type Store struct {
 	patterns []*Pattern
 	byKey    map[*Pattern]*Domain
 	cache    map[string]*Domain
+	hits     map[*Pattern]int64
+}
+
+// DomainStat 是单条域名规则的命中统计。
+type DomainStat struct {
+	Pattern string
+	Hits    int64
 }
 
 // NewStore 校验配置、编译表达式并排序。
@@ -42,6 +49,7 @@ func NewStore(cfg *Config) (*Store, error) {
 		patterns: patterns,
 		byKey:    byKey,
 		cache:    map[string]*Domain{},
+		hits:     map[*Pattern]int64{},
 	}, nil
 }
 
@@ -50,12 +58,16 @@ func (s *Store) Lookup(domain string) (*Domain, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if d, ok := s.cache[domain]; ok {
+		if d != nil {
+			s.hits[d.pattern]++
+		}
 		return d, d != nil
 	}
 	var found *Domain
 	for _, p := range s.patterns {
 		if p.Match(domain) {
 			found = s.byKey[p]
+			s.hits[p]++
 			break
 		}
 	}
@@ -71,6 +83,17 @@ func (s *Store) Patterns() []string {
 	out := make([]string, 0, len(s.patterns))
 	for _, p := range s.patterns {
 		out = append(out, p.String())
+	}
+	return out
+}
+
+// Stats 返回按优先级排序的域名规则命中统计。
+func (s *Store) Stats() []DomainStat {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]DomainStat, 0, len(s.patterns))
+	for _, p := range s.patterns {
+		out = append(out, DomainStat{Pattern: p.String(), Hits: s.hits[p]})
 	}
 	return out
 }

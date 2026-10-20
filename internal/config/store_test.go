@@ -117,3 +117,27 @@ func TestStoreRejectsInvalidConfig(t *testing.T) {
 		t.Fatal("非法配置应被拒绝")
 	}
 }
+
+func TestStoreStats(t *testing.T) {
+	c := Default()
+	c.Domains = map[string]*Domain{
+		"*.github.com": {TLSIgnoreNameMismatch: true},
+		"github.com":   {TLSSNI: true},
+	}
+	st, err := NewStore(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Lookup("github.com")
+	st.Lookup("api.github.com")
+	st.Lookup("api.github.com")
+	st.Lookup("example.com")
+	stats := st.Stats()
+	got := map[string]int64{}
+	for _, s := range stats {
+		got[s.Pattern] = s.Hits
+	}
+	if got["github.com"] != 1 || got["*.github.com"] != 2 {
+		t.Fatalf("stats = %+v", stats)
+	}
+}
