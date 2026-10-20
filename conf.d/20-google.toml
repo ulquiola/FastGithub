@@ -1,0 +1,20 @@
+# 转写自原版 appsettings.google.json
+
+[domains."ajax.googleapis.com"]
+tls_sni = true
+destination = "https://gapis.geekzu.org/ajax/"
+
+[domains."fonts.googleapis.com"]
+tls_sni = true
+destination = "https://fonts.geekzu.org/"
+
+[domains."themes.googleusercontent.com"]
+tls_sni = true
+destination = "https://gapis.geekzu.org/g-themes/"
+
+[domains."fonts.gstatic.com"]
+tls_sni = true
+destination = "https://gapis.geekzu.org/g-fonts/"
+
+[domains."*.gravatar.com"]
+tls_ignore_name_mismatch = true

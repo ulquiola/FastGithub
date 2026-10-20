@@ -1,0 +1,25 @@
+# FastGithub 配置。字段语义见 docs/specs/2026-10-20-fastgithub-go-design.md §6.3。
+
+[server]
+proxy_port = 38457
+ui_port    = 38470
+singleton  = true
+
+[server.transparent]
+https = 443
+http  = 80
+ssh   = 22
+git   = 9418
+
+[dns]
+doh      = ["https://doh.pub/dns-query", "https://dns.alidns.com/dns-query"]
+fallback = ["8.8.8.8:53", "119.29.29.29:53", "114.114.114.114:53"]
+timeout  = "4s"
+
+[intercept]
+mode       = "auto"
+driver_dir = ""
+
+[log]
+level = "info"
+file  = "logs/fastgithub.log"

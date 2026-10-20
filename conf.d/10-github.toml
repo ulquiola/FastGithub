@@ -1,0 +1,31 @@
+# 转写自原版 appsettings.github.json
+
+[domains."github.com"]
+tls_sni = false
+
+[domains."api.github.com"]
+tls_sni = false
+
+[domains."githubstatus.com"]
+tls_sni = false
+
+[domains."gist.github.com"]
+tls_ignore_name_mismatch = true
+
+[domains."vscode-auth.github.com"]
+tls_sni = true
+
+[domains."*.github.com"]
+tls_ignore_name_mismatch = true
+
+[domains."*.github.io"]
+tls_ignore_name_mismatch = true
+
+[domains."*.githubapp.com"]
+tls_ignore_name_mismatch = true
+
+[domains."*.githubassets.com"]
+tls_ignore_name_mismatch = true
+
+[domains."*.githubusercontent.com"]
+tls_ignore_name_mismatch = true
