@@ -106,7 +106,7 @@ func TestRunInstallCert(t *testing.T) {
 	if installed == "" || !strings.Contains(installed, "fastgithub.crt") {
 		t.Fatalf("installed = %q", installed)
 	}
-	if !strings.Contains(stdout.String(), "已加入系统信任库") {
+	if !strings.Contains(stdout.String(), "已加入信任库") {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }
@@ -182,7 +182,7 @@ func TestRunUninstallCert(t *testing.T) {
 	if removed == "" || !strings.Contains(removed, "fastgithub.crt") {
 		t.Fatalf("removed = %q", removed)
 	}
-	if !strings.Contains(stdout.String(), "已从系统信任库移除") {
+	if !strings.Contains(stdout.String(), "已从信任库移除") {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }

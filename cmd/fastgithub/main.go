@@ -21,8 +21,8 @@ const usage = `用法: fastgithub <命令>
 
 命令:
   config validate [--path 文件]        校验配置
-  install-cert [--dir 目录]            生成 CA 并加入系统信任库（需管理员/root）
-  uninstall-cert [--dir 目录]          从系统信任库移除 CA（需管理员/root）
+  install-cert [--dir 目录]            生成 CA 并加入信任库（需管理员/root；macOS 非 root 时为用户级）
+  uninstall-cert [--dir 目录]          从信任库移除 CA（需管理员/root）
   install                              安装系统服务（需管理员/root）
   uninstall                            卸载系统服务
   start                                启动系统服务
@@ -151,7 +151,7 @@ func runInstallCert(args []string, stdout io.Writer) error {
 	if err := installCert(a.CertPath()); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "已加入系统信任库")
+	fmt.Fprintln(stdout, "已加入信任库")
 	return nil
 }
 
@@ -173,7 +173,7 @@ func runUninstallCert(args []string, stdout io.Writer) error {
 	if err := uninstallCert(certPath); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "已从系统信任库移除")
+	fmt.Fprintln(stdout, "已从信任库移除")
 	return nil
 }
 

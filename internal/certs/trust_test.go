@@ -119,8 +119,10 @@ func TestUninstallCommands(t *testing.T) {
 	}
 	sum := sha1.Sum(ca.Certificate().Raw)
 	thumb := strings.ToUpper(hex.EncodeToString(sum[:]))
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 
-	// macOS：按 SHA-1 精确删除并清除信任设置。
+	// macOS：先删系统钥匙串，再删当前用户登录钥匙串。
 	var darwinCalls []commandCall
 	runDarwin := func(name string, args ...string) error {
 		darwinCalls = append(darwinCalls, commandCall{name, args})
@@ -129,7 +131,10 @@ func TestUninstallCommands(t *testing.T) {
 	if err := uninstall(ca.CertPath(), "darwin", runDarwin, func(string) error { return nil }); err != nil {
 		t.Fatalf("darwin uninstall: %v", err)
 	}
-	wantDarwin := []commandCall{{"security", []string{"delete-certificate", "-Z", thumb, "-t", "/Library/Keychains/System.keychain"}}}
+	wantDarwin := []commandCall{
+		{"security", []string{"delete-certificate", "-Z", thumb, "-t", "/Library/Keychains/System.keychain"}},
+		{"security", []string{"delete-certificate", "-Z", thumb, "-t", filepath.Join(home, "Library", "Keychains", "login.keychain-db")}},
+	}
 	if !reflect.DeepEqual(darwinCalls, wantDarwin) {
 		t.Fatalf("darwin 命令 = %#v", darwinCalls)
 	}
@@ -201,56 +206,13 @@ func TestUninstallWindowsNotFoundIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestDarwinInstallFallsBackToAuthorizationPrompt(t *testing.T) {
+func TestDarwinInstallFallsBackToUserKeychain(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	var calls []commandCall
 	run := func(name string, args ...string) error {
 		calls = append(calls, commandCall{name, args})
-		if name == "security" {
-			return errors.New("SecTrustSettingsSetTrustSettings: The authorization was denied.")
-		}
-		return nil
-	}
-	if err := install("/tmp/ca.crt", "darwin", run, func(string, string) error { return nil }); err != nil {
-		t.Fatalf("install: %v", err)
-	}
-	if len(calls) != 2 || calls[1].name != "osascript" || len(calls[1].args) != 2 {
-		t.Fatalf("calls = %#v", calls)
-	}
-	script := calls[1].args[1]
-	if !strings.Contains(script, "with administrator privileges") || !strings.Contains(script, "add-trusted-cert") {
-		t.Fatalf("script = %q", script)
-	}
-}
-
-func TestDarwinUninstallFallsBackToAuthorizationPrompt(t *testing.T) {
-	ca, err := LoadOrCreate(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var calls []commandCall
-	run := func(name string, args ...string) error {
-		calls = append(calls, commandCall{name, args})
-		if name == "security" {
-			return errors.New("The authorization was denied.")
-		}
-		return nil
-	}
-	if err := uninstall(ca.CertPath(), "darwin", run, func(string) error { return nil }); err != nil {
-		t.Fatalf("uninstall: %v", err)
-	}
-	if len(calls) != 2 || calls[1].name != "osascript" {
-		t.Fatalf("calls = %#v", calls)
-	}
-	if !strings.Contains(calls[1].args[1], "delete-certificate") {
-		t.Fatalf("script = %q", calls[1].args[1])
-	}
-}
-
-func TestDarwinInstallFallsBackOnWritePermissions(t *testing.T) {
-	var calls []commandCall
-	run := func(name string, args ...string) error {
-		calls = append(calls, commandCall{name, args})
-		if name == "security" {
+		if len(calls) == 1 {
 			return errors.New("exit status 1: SecCertificateAddToKeychain: Write permissions error.")
 		}
 		return nil
@@ -258,7 +220,31 @@ func TestDarwinInstallFallsBackOnWritePermissions(t *testing.T) {
 	if err := install("/tmp/ca.crt", "darwin", run, func(string, string) error { return nil }); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	if len(calls) != 2 || calls[1].name != "osascript" {
+	if len(calls) != 2 {
 		t.Fatalf("calls = %#v", calls)
+	}
+	want := []string{"add-trusted-cert", "-r", "trustRoot", "-k",
+		filepath.Join(home, "Library", "Keychains", "login.keychain-db"), "/tmp/ca.crt"}
+	if !reflect.DeepEqual(calls[1].args, want) {
+		t.Fatalf("用户钥匙串命令 = %#v", calls[1].args)
+	}
+}
+
+func TestDarwinUninstallSystemNeedsSudo(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ca, err := LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(name string, args ...string) error {
+		if args[len(args)-1] == "/Library/Keychains/System.keychain" {
+			return errors.New("The authorization was denied.")
+		}
+		return nil
+	}
+	err = uninstall(ca.CertPath(), "darwin", run, func(string) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "sudo") {
+		t.Fatalf("err = %v，期望提示需要 sudo", err)
 	}
 }

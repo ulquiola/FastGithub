@@ -3,6 +3,7 @@ package certs
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -28,15 +29,20 @@ func install(certPath, goos string, run commandRunner, copyFile fileCopier) erro
 			return fmt.Errorf("certutil 导入失败（可能需要管理员权限）: %w", err)
 		}
 	case "darwin":
-		args := []string{"add-trusted-cert", "-d", "-r", "trustRoot",
+		systemArgs := []string{"add-trusted-cert", "-d", "-r", "trustRoot",
 			"-k", "/Library/Keychains/System.keychain", certPath}
-		if err := run("security", args...); err != nil {
+		if err := run("security", systemArgs...); err != nil {
 			if !isAuthError(err) {
 				return fmt.Errorf("security 导入失败: %w", err)
 			}
-			// 普通用户进程无法直接写系统钥匙串，弹系统授权对话框重试。
-			if err := run("osascript", "-e", appleScriptFor("/usr/bin/security", args...)); err != nil {
-				return fmt.Errorf("security 导入失败（授权被取消或不可用）: %w", err)
+			// 非 root 进程回退到当前用户的登录钥匙串，无需 sudo。
+			userKeychain, keychainErr := loginKeychainPath()
+			if keychainErr != nil {
+				return fmt.Errorf("security 导入失败（系统钥匙串需要 sudo）: %w", err)
+			}
+			userArgs := []string{"add-trusted-cert", "-r", "trustRoot", "-k", userKeychain, certPath}
+			if userErr := run("security", userArgs...); userErr != nil {
+				return fmt.Errorf("security 导入失败（系统钥匙串需要 sudo，用户钥匙串也失败）: %w", userErr)
 			}
 		}
 	case "linux":
@@ -76,18 +82,24 @@ func uninstall(certPath, goos string, run commandRunner, remove fileRemover) err
 		if err != nil {
 			return err
 		}
-		args := []string{"delete-certificate", "-Z", thumbprint, "-t",
+		var errs []error
+		systemArgs := []string{"delete-certificate", "-Z", thumbprint, "-t",
 			"/Library/Keychains/System.keychain"}
-		if err := run("security", args...); err != nil {
-			if isNotFound(err) {
-				return nil
+		if err := run("security", systemArgs...); err != nil && !isNotFound(err) {
+			if isAuthError(err) {
+				errs = append(errs, fmt.Errorf("系统钥匙串中的证书需要 sudo 移除: %w", err))
+			} else {
+				errs = append(errs, fmt.Errorf("删除系统钥匙串证书失败: %w", err))
 			}
-			if !isAuthError(err) {
-				return fmt.Errorf("security 删除失败: %w", err)
+		}
+		if userKeychain, keychainErr := loginKeychainPath(); keychainErr == nil {
+			userArgs := []string{"delete-certificate", "-Z", thumbprint, "-t", userKeychain}
+			if err := run("security", userArgs...); err != nil && !isNotFound(err) {
+				errs = append(errs, fmt.Errorf("删除用户钥匙串证书失败: %w", err))
 			}
-			if err := run("osascript", "-e", appleScriptFor("/usr/bin/security", args...)); err != nil {
-				return fmt.Errorf("security 删除失败（授权被取消或不可用）: %w", err)
-			}
+		}
+		if len(errs) > 0 {
+			return errors.Join(errs...)
 		}
 	case "linux":
 		const dest = "/usr/local/share/ca-certificates/fastgithub.crt"
@@ -116,20 +128,12 @@ func isAuthError(err error) bool {
 	return false
 }
 
-// appleScriptFor 生成带管理员权限的 do shell script，命令参数做 shell 与 AppleScript 双重转义。
-func appleScriptFor(name string, args ...string) string {
-	parts := []string{name}
-	for _, arg := range args {
-		parts = append(parts, shellQuote(arg))
+func loginKeychainPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
 	}
-	command := strings.Join(parts, " ")
-	command = strings.ReplaceAll(command, `\`, `\\`)
-	command = strings.ReplaceAll(command, `"`, `\"`)
-	return `do shell script "` + command + `" with administrator privileges`
-}
-
-func shellQuote(s string) string {
-	return `'` + strings.ReplaceAll(s, `'`, `'\''`) + `'`
+	return filepath.Join(home, "Library", "Keychains", "login.keychain-db"), nil
 }
 
 func isNotFound(err error) bool {
@@ -138,7 +142,8 @@ func isNotFound(err error) bool {
 		strings.Contains(msg, "could not be found") ||
 		strings.Contains(msg, "crypt_e_not_found") ||
 		strings.Contains(msg, "0x80092004") ||
-		strings.Contains(msg, "cannot find")
+		strings.Contains(msg, "cannot find") ||
+		strings.Contains(msg, "unable to delete certificate matching")
 }
 
 // certThumbprint 返回 Windows certutil 使用的 SHA-1 指纹（大写十六进制）。
