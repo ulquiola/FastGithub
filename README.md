@@ -10,7 +10,7 @@ FastGithub 的 Go 重写版：解决 `github.com` 打不开、头像加载失败
 
 ## 状态
 
-配置内核（M1-A）、证书模块（M1-B）与 DNS 解析器（M1-C）已完成。完整设计与可行性分析见 [docs/specs/2026-10-20-fastgithub-go-design.md](docs/specs/2026-10-20-fastgithub-go-design.md)。
+配置内核（M1-A）、证书模块（M1-B）、DNS 解析器（M1-C）与拨号/代理（M1-D）已完成。完整设计与可行性分析见 [docs/specs/2026-10-20-fastgithub-go-design.md](docs/specs/2026-10-20-fastgithub-go-design.md)。
 
 ```console
 $ fastgithub config validate
@@ -19,8 +19,12 @@ $ fastgithub config validate --path ./fastgithub.toml
 $ fastgithub install-cert
 CA 证书: cacert/fastgithub.crt
 已加入系统信任库
+$ fastgithub run
+代理已启动: 127.0.0.1:38457
 $ fastgithub version
 ```
+
+`run` 启动显式代理；配置命中域名走本地 CA 的 MITM，未命中走盲隧道，`GET http://127.0.0.1:38457/` 返回 PAC。
 
 `install-cert` 会在 `cacert/` 生成 CA（已存在则复用），并把证书加入系统信任库；Windows 需要管理员权限，Linux/macOS 需要 root/sudo。Windows 下路径分隔符显示为 `\`。
 
@@ -28,7 +32,7 @@ $ fastgithub version
 
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
-| M1 | 配置 / DNS / 拨号 / 证书 / MITM / 流量统计 + 38457 代理 + PAC + Web UI 骨架 | 进行中（M1-A 配置、M1-B 证书、M1-C DNS 已完成） |
+| M1 | 配置 / DNS / 拨号 / 证书 / MITM / 流量统计 + 38457 代理 + PAC + Web UI 骨架 | 进行中（M1-A 配置、M1-B 证书、M1-C DNS、M1-D 拨号/代理已完成） |
 | M2 | Windows WinDivert 透明拦截 + 服务安装 | 未开始 |
 | M3 | 配置片段转写、兼容端点、行为对齐核对、CI 与发布脚本 | 未开始 |
 

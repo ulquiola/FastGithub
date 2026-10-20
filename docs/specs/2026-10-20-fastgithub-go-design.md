@@ -383,8 +383,8 @@ function FindProxyForURL(url, host){
 | `DomainResolver.cs` | `internal/resolver/resolve.go` | 组装、缓存键 | `resolve_test.go` |
 | `HttpClientHandler.cs` | `internal/dialer/dialer.go` | IP 顺序、SNI、证书判定、10s 超时 | `dialer_test.go` |
 | `LifetimeHttpHandler*.cs` | `internal/dialer/pool.go` | 连接复用与失效清理 | `pool_test.go` |
-| `KestrelServerExtensions.cs` | `internal/app/listeners.go` | 端口、TLS 条件、日志文案 | `listeners_test.go` |
-| `TlsInvadeMiddleware.cs` | `internal/mitm/sniff.go` | 首两字节 `0x16 0x03` 判定 | `sniff_test.go` |
+| `KestrelServerExtensions.cs` | `internal/app/run.go` | 端口、TLS 条件、日志文案 | `run_test.go` |
+| `TlsInvadeMiddleware.cs` | `internal/mitm/sniff.go` | 首两字节 `0x16 0x03` 判定 | `tunnel_test.go` |
 | `HttpProxyMiddleware.cs` | `internal/mitm/connect.go` | 请求行/头解析、`200/400` 响应 | `connect_test.go` |
 | `TunnelMiddleware.cs` | `internal/mitm/tunnel.go` | 双向复制、目标选择 | `tunnel_test.go` |
 | `HttpReverseProxyMiddleware.cs` | `internal/mitm/reverse.go` | `Host`、`Destination`、`Response` | `reverse_test.go` |
@@ -503,4 +503,4 @@ fastgithub-go/
 - IPv6 上游：原版按 `OSSupportsIPv6` 决定是否查 AAAA；Go 版默认查，可配置关闭。
 - 是否在内置 DoH 之外保留"外挂 dnscrypt-proxy"兼容开关：暂不做，配置里出现 `dnscrypt` 键会报错。
 - 性能基准（并发连接数、单连接吞吐）在 M3 补 `go test -bench`。
-- **`@ipaddress` 展开为 IP 字面量作 SNI 的语义（M1-D 前必须确认）**：Go 与 .NET 对 IP 字面量都不发送 SNI（RFC 6066），实际等价于"不发 SNI"。M1-D 实现 `dialer` 前须对照原版行为确认；若确需发送 IP 字面量 SNI，标准库不支持，需自定义 ClientHello，成本较高。
+- **`@ipaddress` 展开为 IP 字面量作 SNI 的语义（M1-D 已确认）**：Go 与 .NET 对 IP 字面量都不发送 SNI（RFC 6066），实际等价于"不发 SNI"。`dialer_test.go` 用假 TLS 服务器断言 `@ipaddress` 的 `ClientHello.ServerName` 为空；若将来确需发送 IP 字面量 SNI，标准库不支持，需自定义 ClientHello，成本较高。

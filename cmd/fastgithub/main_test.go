@@ -120,3 +120,22 @@ func TestRunInstallCertFailure(t *testing.T) {
 		t.Fatalf("exit = %d, stderr = %q", code, stderr.String())
 	}
 }
+
+func TestRunRunInvalidConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fastgithub.toml")
+	if err := os.WriteFile(path, []byte("[server]\nproxy_port = 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"run", "--path", path}, &stdout, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "proxy_port") {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestRunRunUsage(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"run", "extra"}, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "用法") {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+}

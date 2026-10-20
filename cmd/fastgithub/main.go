@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"fastgithub-go/internal/app"
 	"fastgithub-go/internal/certs"
@@ -16,6 +19,7 @@ const usage = `用法: fastgithub <命令>
 命令:
   config validate [--path 文件]        校验配置
   install-cert [--dir 目录]            生成 CA 并加入系统信任库（需管理员/root）
+  run [--path 文件]                    启动 38457 显式代理
   version                              打印版本信息
 `
 
@@ -45,6 +49,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "install-cert":
 		if err := runInstallCert(args[1:], stdout); err != nil {
+			fmt.Fprintln(stderr, "错误: "+err.Error())
+			return 1
+		}
+		return 0
+	case "run":
+		if err := runRun(args[1:], stdout); err != nil {
 			fmt.Fprintln(stderr, "错误: "+err.Error())
 			return 1
 		}
@@ -108,4 +118,32 @@ func runInstallCert(args []string, stdout io.Writer) error {
 	}
 	fmt.Fprintln(stdout, "已加入系统信任库")
 	return nil
+}
+
+func runRun(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	path := fs.String("path", "", "配置文件路径")
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("参数错误: %w", err)
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("用法: fastgithub run [--path 文件]")
+	}
+	mainPath, confDir, err := config.Discover(*path)
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(mainPath, confDir)
+	if err != nil {
+		return err
+	}
+	store, err := config.NewStore(cfg)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	fmt.Fprintf(stdout, "代理已启动: 127.0.0.1:%d\n", cfg.Server.ProxyPort)
+	return app.Run(ctx, cfg, store)
 }
