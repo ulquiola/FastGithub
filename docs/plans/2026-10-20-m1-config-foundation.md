@@ -1175,6 +1175,8 @@ git commit -m "feat(config): 反射解码并拒绝未知配置项"
 
 ### Task 6: 配置结构体、默认值、Duration 与校验
 
+> **执行说明：** 本任务与 Task 7 同属一个编译单元（`Validate` 调用 `NewPattern`，而 Task 7 的 `sni.go`/`destination.go` 引用本任务的 `Domain` 类型）。实施时必须把 Task 6 与 Task 7 **合并为一次实现与一次提交序列**，两个任务共用一份 brief；评审也按一份 diff 进行。
+
 **Files:**
 - Create: `internal/config/config.go`
 - Create: `internal/config/duration.go`
