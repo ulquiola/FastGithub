@@ -1,0 +1,80 @@
+# 转写自原版 appsettings.microsoft.json
+
+[domains."azure.com"]
+tls_sni = true
+
+[domains."*.azure.com"]
+tls_sni = true
+
+[domains."*.*.azure.com"]
+tls_sni = true
+
+[domains."*.*.*.azure.com"]
+tls_sni = true
+
+[domains."*.azureedge.net"]
+tls_sni = true
+
+[domains."*.visualstudio.com"]
+tls_sni = true
+
+[domains."*.*.visualstudio.com"]
+tls_sni = true
+
+[domains."*.live.com"]
+tls_sni = true
+
+[domains."*.*.live.com"]
+tls_sni = true
+
+[domains."microsoftonline.com"]
+tls_sni = true
+
+[domains."*.microsoftonline.com"]
+tls_sni = true
+
+[domains."windows.net"]
+tls_sni = true
+
+[domains."*.windows.net"]
+tls_sni = true
+
+[domains."*.*.windows.net"]
+tls_sni = true
+
+[domains."azurewebsites.net"]
+tls_sni = true
+
+[domains."*.azurewebsites.net"]
+tls_sni = true
+
+[domains."*.*.azurewebsites.net"]
+tls_sni = true
+
+[domains."*.vsassets.io"]
+tls_sni = true
+
+[domains."aadcdn.msauth.net"]
+tls_sni = true
+
+[domains."aadcdn.msftauth.net"]
+tls_sni = true
+
+[domains."static2.sharepointonline.com"]
+tls_sni = true
+
+[domains."az764295.vo.msecnd.net"]
+tls_sni = true
+destination = "https://vscode.cdn.azure.cn/"
+
+[domains."*.*.msecnd.net"]
+tls_sni = true
+
+[domains."*.aspnetcdn.com"]
+tls_sni = true
+
+[domains."onedrive.live.com"]
+tls_sni = false
+
+[domains."*.onedrive.live.com"]
+tls_sni = false

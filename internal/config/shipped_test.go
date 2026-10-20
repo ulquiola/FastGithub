@@ -1,7 +1,9 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -50,5 +52,71 @@ func TestShippedConfig(t *testing.T) {
 	}
 	if cfg.Server.ProxyPort != 38457 || cfg.Server.UIPort != 38470 {
 		t.Fatalf("端口不符: %+v", cfg.Server)
+	}
+}
+
+func TestShippedConfigExpanded(t *testing.T) {
+	root := filepath.Join("..", "..")
+	cfg, err := Load(filepath.Join(root, "fastgithub.toml"), filepath.Join(root, "conf.d"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	st, err := NewStore(cfg)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	cases := []struct {
+		domain string
+		sni    bool
+		ignore bool
+		dest   string
+	}{
+		{"az764295.vo.msecnd.net", true, false, "https://vscode.cdn.azure.cn/"},
+		{"onedrive.live.com", false, false, ""},
+		{"sub.onedrive.live.com", false, false, ""},
+		{"registry.nuget.org", true, false, ""},
+		{"cdn.bootcss.com", true, false, "https://cdnjs.cloudflare.com/ajax/libs/"},
+		{"v2ex.com", false, false, ""},
+		{"s3.amazonaws.com", false, true, ""},
+		{"foo.fastly.net", false, true, ""},
+		{"imgur.com", false, true, ""},
+	}
+	for _, c := range cases {
+		d, ok := st.Lookup(c.domain)
+		if !ok {
+			t.Fatalf("%s 未命中", c.domain)
+		}
+		if d.TLSSNI != c.sni || d.TLSIgnoreNameMismatch != c.ignore || d.Destination != c.dest {
+			t.Fatalf("%s = %+v，期望 sni=%v ignore=%v dest=%q", c.domain, d, c.sni, c.ignore, c.dest)
+		}
+	}
+}
+
+func TestShippedConfigGolden(t *testing.T) {
+	root := filepath.Join("..", "..")
+	cfg, err := Load(filepath.Join(root, "fastgithub.toml"), filepath.Join(root, "conf.d"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join("testdata", "shipped_domains.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(cfg.Domains) != len(lines) {
+		t.Fatalf("域名规则数 = %d，期望 %d", len(cfg.Domains), len(lines))
+	}
+	for _, line := range lines {
+		parts := strings.SplitN(line, "\t", 4)
+		if len(parts) != 4 {
+			t.Fatalf("golden 行格式错误: %q", line)
+		}
+		d, ok := cfg.Domains[parts[0]]
+		if !ok {
+			t.Fatalf("缺少规则 %s", parts[0])
+		}
+		if d.TLSSNI != (parts[1] == "true") || d.TLSIgnoreNameMismatch != (parts[2] == "true") || d.Destination != parts[3] {
+			t.Fatalf("%s = %+v，golden = %q", parts[0], d, line)
+		}
 	}
 }

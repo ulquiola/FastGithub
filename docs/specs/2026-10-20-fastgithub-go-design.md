@@ -353,7 +353,7 @@ function FindProxyForURL(url, host){
 | GET | `/api/logs` | 否 | SSE 日志流（环形缓冲 1000 条） |
 | GET | `/api/cert` | 否 | 下载 CA |
 | POST | `/api/cert/install` | 是 | 安装并信任 CA |
-| POST | `/api/intercept` | 是 | 开关拦截 |
+| POST | `/api/intercept` | 是 | 预留（当前 501，后续实现运行时开关） |
 | GET | `/flowStatistics` | 否 | 兼容端点，字段 `TotalRead/TotalWrite/ReadRate/WriteRate`（PascalCase）；同时注册在 38457 与 Windows 的 80 上 |
 
 鉴权：变更类接口要求 `X-FastGithub-Token`，令牌启动时随机生成、写入 CA 目录同级 `ui.token`（0600），页面由服务端注入。
@@ -361,7 +361,7 @@ function FindProxyForURL(url, host){
 ### 7.8 服务与打包
 
 - `start/stop`：Windows 用 SCM（`CreateService` 指向自身 `run`；`main` 调用 `StartServiceCtrlDispatcher` 注册控制处理器，失败回滚删除）；Linux 写 `/etc/systemd/system/fastgithub.service`（`Type=simple`、`Restart=always`）；macOS 写 launchd plist。
-- 构建矩阵：`CGO_ENABLED=0` × `{windows,linux,darwin}` × `{amd64,arm64}`，`-ldflags "-s -w -X main.version=..."`。
+- 构建矩阵：`CGO_ENABLED=0` × `{windows,linux,darwin}` × `{amd64,arm64}`，`-ldflags "-s -w -X fastgithub-go/internal/app.version=... -X ...commit=... -X ...buildTime=..."`。
 - WinDivert 不内嵌：`make fetch-windivert` 下载官方包并校验 SHA-256，放入发布 zip；仓库只保留脚本与校验和。
 - 发布包结构：`fastgithub(.exe)`、`fastgithub.toml`、`conf.d/`、`windivert/`（可选）、`README.md`、`LICENSE`。
 
@@ -392,7 +392,7 @@ function FindProxyForURL(url, host){
 | `HttpProxyPacMiddleware.cs` | `internal/mitm/pac.go` | 文本逐字一致 | `pac_test.go` |
 | `CertGenerator.cs` / `CertService.cs` | `internal/certs/ca.go`、`leaf.go` | 扩展项、SAN、有效期、缓存 | `ca_test.go`、`leaf_test.go` |
 | `CaCertInstallerOf*.cs` | `internal/certs/trust.go` | 三个平台命令 | `trust_test.go` + 手工验收 |
-| `TcpInterceptor.cs` / `DnsInterceptor.cs` | `internal/intercept/*` | 端口改写、DNS 应答、校验和 | 纯函数测试 + 手工 |
+| `TcpInterceptor.cs` / `DnsInterceptor.cs` | `internal/intercept/*` | 端口改写、DNS 应答、校验和 | `packet_test.go`、`dnsanswer_test.go` + 手工 |
 | `FlowAnalyzer.cs` | `internal/flow/flow.go` | 计数与速率 | `flow_test.go` |
 | `FastGithub.UI` | `internal/ui/*` | 流量图、日志、证书、流量统计 | `ui_test.go` |
 | `appsettings*.json` | `conf.d/*.toml` | 逐条转写 | golden 测试 |

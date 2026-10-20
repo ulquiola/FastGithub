@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -201,12 +202,14 @@ func TestLoadOrCreateToken(t *testing.T) {
 	if len(token) != 32 {
 		t.Fatalf("token = %q", token)
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0600 {
-		t.Fatalf("权限 = %v", info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("权限 = %v", info.Mode().Perm())
+		}
 	}
 	again, err := LoadOrCreateToken(path)
 	if err != nil || again != token {

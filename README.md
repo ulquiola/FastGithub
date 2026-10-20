@@ -10,11 +10,11 @@ FastGithub 的 Go 重写版：解决 `github.com` 打不开、头像加载失败
 
 ## 状态
 
-M1 已完成；M2 代码完成（Windows WinDivert 透明拦截与服务安装），待在 Windows 上手工验收。完整设计与可行性分析见 [docs/specs/2026-10-20-fastgithub-go-design.md](docs/specs/2026-10-20-fastgithub-go-design.md)。
+M1 已完成；M2 代码完成（Windows WinDivert 透明拦截与服务安装），待在 Windows 上手工验收；M3 已完成。完整设计与可行性分析见 [docs/specs/2026-10-20-fastgithub-go-design.md](docs/specs/2026-10-20-fastgithub-go-design.md)。
 
 ```console
 $ fastgithub config validate
-配置有效: 15 条域名规则，代理端口 38457，UI 端口 38470
+配置有效: 55 条域名规则，代理端口 38457，UI 端口 38470
 $ fastgithub config validate --path ./fastgithub.toml
 $ fastgithub install-cert
 CA 证书: cacert/fastgithub.crt
@@ -35,7 +35,18 @@ $ fastgithub version
 |---|---|---|
 | M1 | 配置 / DNS / 拨号 / 证书 / MITM / 流量统计 + 38457 代理 + PAC + Web UI 骨架 | 已完成（M1-A~E） |
 | M2 | Windows WinDivert 透明拦截 + 服务安装 | 代码完成，待 Windows 手工验收 |
-| M3 | 配置片段转写、兼容端点、行为对齐核对、CI 与发布脚本 | 未开始 |
+| M3 | 配置片段转写、兼容端点、行为对齐核对、CI 与发布脚本 | 已完成 |
+
+## 构建与发布
+
+```console
+$ make test
+$ make ci                 # 测试 + vet + gofmt + 六目标交叉编译
+$ make fetch-windivert    # 下载并校验 WinDivert 2.2.2 到 windivert/
+$ VERSION=v0.1.0 make release
+```
+
+发布产物在 `dist/fastgithub-<os>-<arch>.zip`，包含可执行文件、`fastgithub.toml`、`conf.d/`、README 与 LICENSE；存在 `windivert/` 时仅随 `windows/amd64` 包一并打包。Windows 上没有 make 时可直接运行 `bash scripts/ci.sh`。
 
 ## Windows 透明拦截与服务
 
@@ -47,7 +58,7 @@ $ fastgithub stop                 # 停止服务
 $ fastgithub uninstall            # 卸载服务
 ```
 
-WinDivert 不随包内嵌，需把 `WinDivert.dll` 与 `WinDivert64.sys` 放到 `intercept.driver_dir`、可执行文件同目录或 `windivert/` 下。DLL 缺失、非管理员或 `WinDivertOpen` 失败时只告警，38457 显式代理继续可用。
+WinDivert 不随包内嵌，需把 `WinDivert.dll` 与 `WinDivert64.sys` 放到 `intercept.driver_dir`、可执行文件同目录或 `windivert/` 下。DLL 缺失、非管理员或 `WinDivertOpen` 失败时只告警，38457 显式代理继续可用。WinDivert 2.2.2 仅提供 x86/x64 驱动，`windows/arm64` 包不含 `windivert/`；再分发时请保留其 `LICENSE`（LGPLv3/GPLv2）。UI 的“切换拦截”按钮当前返回 501，请通过 `intercept.mode` 配置启停。
 
 ## 目标平台
 

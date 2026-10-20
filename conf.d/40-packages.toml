@@ -1,0 +1,7 @@
+# 转写自原版 appsettings.packages.json
+
+[domains."*.nuget.org"]
+tls_sni = true
+
+[domains."*.maven.org"]
+tls_sni = true

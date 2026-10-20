@@ -1,0 +1,55 @@
+*.*.*.azure.com	true	false	
+*.*.*.fastly.net	false	true	
+*.*.azure.com	true	false	
+*.*.azurewebsites.net	true	false	
+*.*.fastly.net	false	true	
+*.*.imgur.com	false	true	
+*.*.live.com	true	false	
+*.*.msecnd.net	true	false	
+*.*.visualstudio.com	true	false	
+*.*.windows.net	true	false	
+*.aspnetcdn.com	true	false	
+*.azure.com	true	false	
+*.azureedge.net	true	false	
+*.azurewebsites.net	true	false	
+*.cloudflare.com	true	false	
+*.fastly.net	false	true	
+*.github.com	false	true	
+*.github.io	false	true	
+*.githubapp.com	false	true	
+*.githubassets.com	false	true	
+*.githubusercontent.com	false	true	
+*.gravatar.com	false	true	
+*.imgur.com	false	true	
+*.live.com	true	false	
+*.maven.org	true	false	
+*.microsoftonline.com	true	false	
+*.nuget.org	true	false	
+*.onedrive.live.com	false	false	
+*.s3.amazonaws.com	false	true	
+*.v2ex.com	false	false	
+*.visualstudio.com	true	false	
+*.vsassets.io	true	false	
+*.windows.net	true	false	
+aadcdn.msauth.net	true	false	
+aadcdn.msftauth.net	true	false	
+ajax.googleapis.com	true	false	https://gapis.geekzu.org/ajax/
+api.github.com	false	false	
+az764295.vo.msecnd.net	true	false	https://vscode.cdn.azure.cn/
+azure.com	true	false	
+azurewebsites.net	true	false	
+cdn.bootcss.com	true	false	https://cdnjs.cloudflare.com/ajax/libs/
+fonts.googleapis.com	true	false	https://fonts.geekzu.org/
+fonts.gstatic.com	true	false	https://gapis.geekzu.org/g-fonts/
+gist.github.com	false	true	
+github.com	false	false	
+githubstatus.com	false	false	
+imgur.com	false	true	
+microsoftonline.com	true	false	
+onedrive.live.com	false	false	
+s3.amazonaws.com	false	true	
+static2.sharepointonline.com	true	false	
+themes.googleusercontent.com	true	false	https://gapis.geekzu.org/g-themes/
+v2ex.com	false	false	
+vscode-auth.github.com	true	false	
+windows.net	true	false	

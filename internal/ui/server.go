@@ -252,7 +252,7 @@ func (s *Server) intercept(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusUnauthorized, map[string]string{"error": "无效的令牌"})
 		return
 	}
-	writeJSONStatus(w, http.StatusNotImplemented, map[string]string{"error": "拦截功能将在 M2 提供"})
+	writeJSONStatus(w, http.StatusNotImplemented, map[string]string{"error": "运行时拦截开关尚未提供，请在配置中设置 intercept.mode"})
 }
 
 func (s *Server) authorized(r *http.Request) bool {

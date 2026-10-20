@@ -1,0 +1,39 @@
+# 转写自原版 appsettings.amazonaws.json / bootcss.json / fastly.json /
+# imgur.json / v2ex.json
+
+[domains."s3.amazonaws.com"]
+tls_ignore_name_mismatch = true
+
+[domains."*.s3.amazonaws.com"]
+tls_ignore_name_mismatch = true
+
+[domains."*.cloudflare.com"]
+tls_sni = true
+
+[domains."cdn.bootcss.com"]
+tls_sni = true
+destination = "https://cdnjs.cloudflare.com/ajax/libs/"
+
+[domains."*.fastly.net"]
+tls_ignore_name_mismatch = true
+
+[domains."*.*.fastly.net"]
+tls_ignore_name_mismatch = true
+
+[domains."*.*.*.fastly.net"]
+tls_ignore_name_mismatch = true
+
+[domains."imgur.com"]
+tls_ignore_name_mismatch = true
+
+[domains."*.imgur.com"]
+tls_ignore_name_mismatch = true
+
+[domains."*.*.imgur.com"]
+tls_ignore_name_mismatch = true
+
+[domains."v2ex.com"]
+tls_sni = false
+
+[domains."*.v2ex.com"]
+tls_sni = false

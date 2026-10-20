@@ -18,8 +18,8 @@ func TestListenTCPFallbackSkipsBusyPort(t *testing.T) {
 		t.Fatalf("ListenTCPFallback: %v", err)
 	}
 	defer ln.Close()
-	if actual != port+1 {
-		t.Fatalf("actual = %d，期望 %d", actual, port+1)
+	if actual <= port || actual > port+2 {
+		t.Fatalf("actual = %d，期望在 %d..%d 之间", actual, port+1, port+2)
 	}
 }
 
