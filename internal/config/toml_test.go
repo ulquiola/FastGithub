@@ -154,6 +154,31 @@ empty = []
 	}
 }
 
+func TestParseArrayBoundaries(t *testing.T) {
+	root, err := Parse([]byte(`a = ["x,y", "p]q"]` + "\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	arr := root.Table["a"].Arr
+	if len(arr) != 2 || arr[0].Str != "x,y" || arr[1].Str != "p]q" {
+		t.Fatalf("a = %+v", arr)
+	}
+	cases := []struct {
+		src  string
+		want string
+	}{
+		{"a = [[1,2]]\n", "不支持嵌套数组"},
+		{"a = [1\n", "数组缺少 ']'"},
+		{"a = [1, , 2]\n", "数组存在空元素"},
+	}
+	for _, c := range cases {
+		_, err := Parse([]byte(c.src))
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("Parse(%q) err = %v，期望包含 %q", c.src, err, c.want)
+		}
+	}
+}
+
 func TestParseErrors(t *testing.T) {
 	cases := []struct {
 		name string
