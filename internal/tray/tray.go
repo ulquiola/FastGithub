@@ -87,7 +87,6 @@ func MenuItems(o Options) []Item {
 	return []Item{
 		{ID: IDOpenUI, Label: "打开界面", Enabled: true},
 		{ID: IDCopyProxy, Label: "复制代理地址", Enabled: true},
-		{ID: IDInstallCert, Label: "安装证书（UAC）", Enabled: true},
 		// 拦截项只是状态展示：运行中切换需要重启代理，所以两种权限下都置灰，
 		// 避免被误当成可切换的开关。
 		{ID: IDInterceptState, Label: interceptLabel, Enabled: false, Checked: o.InterceptEnabled},

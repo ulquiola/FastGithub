@@ -43,7 +43,7 @@ func TestMenuItems(t *testing.T) {
 		Autostart:        true,
 	}
 	items := MenuItems(o)
-	wantIDs := []int{IDOpenUI, IDCopyProxy, IDInstallCert, IDInterceptState, IDAutostart, IDQuit}
+	wantIDs := []int{IDOpenUI, IDCopyProxy, IDInterceptState, IDAutostart, IDQuit}
 	if len(items) != len(wantIDs) {
 		t.Fatalf("菜单项数 = %d，期望 %d：%+v", len(items), len(wantIDs), items)
 	}
@@ -59,22 +59,23 @@ func TestMenuItems(t *testing.T) {
 		}
 	}
 
-	intercept := items[3]
+	intercept := itemByID(t, items, IDInterceptState)
 	if intercept.Enabled {
 		t.Fatalf("非管理员时拦截项应禁用：%+v", intercept)
 	}
 	if !strings.Contains(intercept.Label, "需管理员") {
 		t.Fatalf("非管理员时拦截项应带“需管理员”，实际 %q", intercept.Label)
 	}
-	if !items[4].Checked {
-		t.Fatalf("开机启动已启用时该项应勾选：%+v", items[4])
+	autostart := itemByID(t, items, IDAutostart)
+	if !autostart.Checked {
+		t.Fatalf("开机启动已启用时该项应勾选：%+v", autostart)
 	}
 
 	o.Admin = true
 	o.InterceptEnabled = true
 	o.Autostart = false
 	items = MenuItems(o)
-	intercept = items[3]
+	intercept = itemByID(t, items, IDInterceptState)
 	if intercept.Enabled {
 		t.Fatalf("拦截项仅展示状态，管理员下也应禁用：%+v", intercept)
 	}
@@ -117,4 +118,15 @@ func TestUIURL(t *testing.T) {
 			t.Fatalf("uiURL(%q) = %q，期望 %q", tc.in, got, tc.want)
 		}
 	}
+}
+
+func itemByID(t *testing.T, items []Item, id int) Item {
+	t.Helper()
+	for _, it := range items {
+		if it.ID == id {
+			return it
+		}
+	}
+	t.Fatalf("menu item %d not found: %+v", id, items)
+	return Item{}
 }
