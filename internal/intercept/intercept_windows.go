@@ -24,8 +24,15 @@ type winDivert struct {
 	checksum *syscall.Proc
 }
 
-// Available 在 Windows 上返回 true；实际可用性由 Start 的加载结果决定。
-func Available() bool { return true }
+// Available 报告 WinDivert DLL 是否真的可以加载；驱动能否打开由 Start 决定。
+func Available() bool {
+	w, err := loadWinDivert("")
+	if err != nil {
+		return false
+	}
+	_ = w.dll.Release()
+	return true
+}
 
 func loadWinDivert(driverDir string) (*winDivert, error) {
 	candidates := []string{}
