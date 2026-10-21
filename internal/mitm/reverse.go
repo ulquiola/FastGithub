@@ -1,6 +1,7 @@
 package mitm
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -161,13 +162,22 @@ func (p *ReverseProxy) serveUpgrade(w http.ResponseWriter, resp *http.Response) 
 		return
 	}
 	defer client.Close()
-	// 测试或代理构造的响应可能没有填 Proto，补齐以免写出 HTTP/0.0。
-	if resp.ProtoMajor == 0 {
-		resp.ProtoMajor, resp.ProtoMinor = 1, 1
-	}
 	resp.Header.Del("Transfer-Encoding")
 	resp.Header.Del("Content-Length")
-	if err := resp.Write(client); err != nil {
+	// 不能直接用 resp.Write：101 响应 ContentLength 为 0 时，它会先读一个
+	// body 字节判断是否真的为空，而升级后的 body 要等客户端先发数据，会死锁。
+	proto := "HTTP/1.1"
+	if resp.ProtoMajor > 0 {
+		proto = fmt.Sprintf("HTTP/%d.%d", resp.ProtoMajor, resp.ProtoMinor)
+	}
+	text := http.StatusText(resp.StatusCode)
+	if _, err := fmt.Fprintf(client, "%s %d %s\r\n", proto, resp.StatusCode, text); err != nil {
+		return
+	}
+	if err := resp.Header.Write(client); err != nil {
+		return
+	}
+	if _, err := io.WriteString(client, "\r\n"); err != nil {
 		return
 	}
 	done := make(chan struct{}, 2)
