@@ -708,9 +708,9 @@ func OpenURL(url string) error {
 	if url == "" {
 		return errors.New("URL 为空")
 	}
-	// 交给已经以普通权限运行的 Explorer 打开，避免从提权进程直接 ShellExecute
-	// 把浏览器也拉成管理员（Edge/Chrome 会因此拒绝与普通实例共存）。
-	return shellExecute(0, "open", "explorer.exe", url, swShowNormal)
+	// 直接交给系统默认浏览器。注意不要用 explorer.exe <url>：每次调用都会新拉一个
+	// explorer 进程，在本机会因 0xc0000142 初始化失败并弹出“应用程序无法正常启动”。
+	return shellExecute(0, "open", url, "", swShowNormal)
 }
 
 // RunElevated 以管理员身份重新运行自身并传入 params（会触发 UAC）。
