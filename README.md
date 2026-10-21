@@ -3,6 +3,7 @@
 FastGithub 的 Go 重写版：解决 `github.com` 打不开、头像加载失败、release 下载与 `git clone/pull/push` 失败的问题。
 
 > 上游 `github.com/dotnetcore/FastGithub` 已消失，本项目基于其 `v2.1.5` 备份源码重写，保持行为对等、配置语义兼容。
+> 原始 .NET 源码（850 个提交，`f5425ec`）归档于 `git@gitee.com:angstrom/FastGithub.git` 的 `master` 分支；本仓库不再包含任何 .NET 代码。
 
 - 不做翻墙，不加密流量，不加速游戏
 - 只支持仍被发行方支持的操作系统
@@ -10,7 +11,7 @@ FastGithub 的 Go 重写版：解决 `github.com` 打不开、头像加载失败
 
 ## 状态
 
-M1 已完成；M2 代码完成（Windows WinDivert 透明拦截与服务安装），待在 Windows 上手工验收；M3 已完成。完整设计与可行性分析见 [docs/specs/2026-10-20-fastgithub-go-design.md](docs/specs/2026-10-20-fastgithub-go-design.md)。
+M1、M2、M3 均已完成，Windows 真机验收通过（WinDivert 透明拦截、证书、服务安装、托盘）。完整设计与可行性分析见 [docs/specs/2026-10-20-fastgithub-go-design.md](docs/specs/2026-10-20-fastgithub-go-design.md)。
 
 ```console
 $ fastgithub config validate
@@ -39,7 +40,7 @@ macOS 没有透明拦截，浏览器需要走系统代理：Web UI 的“系统�
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
 | M1 | 配置 / DNS / 拨号 / 证书 / MITM / 流量统计 + 38457 代理 + PAC + Web UI 骨架 | 已完成（M1-A~E） |
-| M2 | Windows WinDivert 透明拦截 + 服务安装 | 代码完成，待 Windows 手工验收 |
+| M2 | Windows WinDivert 透明拦截 + 服务安装 | 已完成（Windows 真机验收） |
 | M3 | 配置片段转写、兼容端点、行为对齐核对、CI 与发布脚本 | 已完成 |
 
 ## 构建与发布

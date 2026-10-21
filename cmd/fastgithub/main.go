@@ -17,7 +17,6 @@ import (
 	"fastgithub-go/internal/app"
 	"fastgithub-go/internal/certs"
 	"fastgithub-go/internal/config"
-	"fastgithub-go/internal/dashboard"
 	"fastgithub-go/internal/intercept"
 	"fastgithub-go/internal/tray"
 )
@@ -127,23 +126,12 @@ var startTray = runTrayCommand
 // acquireTrayInstance 可在测试中替换，避免测试进程占用真实的单实例互斥体。
 var acquireTrayInstance = tray.AcquireSingleInstance
 
-// startDashboard 可在测试中替换，避免测试进程真正监听端口并阻塞。
-var startDashboard = runDashboardCommand
-
 func runTrayReport(args []string, stdout, stderr io.Writer) int {
 	if err := startTray(args, stdout, stderr); err != nil {
 		if errors.Is(err, tray.ErrAlreadyRunning) {
 			fmt.Fprintln(stdout, "已有一个 FastGithub 托盘实例在运行，本进程退出。")
 			return 0
 		}
-		fmt.Fprintln(stderr, "错误: "+err.Error())
-		return 1
-	}
-	return 0
-}
-
-func runDashboardReport(args []string, stdout, stderr io.Writer) int {
-	if err := startDashboard(args, stdout, stderr); err != nil {
 		fmt.Fprintln(stderr, "错误: "+err.Error())
 		return 1
 	}
@@ -353,58 +341,7 @@ func runTrayCommand(args []string, stdout, _ io.Writer) error {
 	})
 }
 
-// runDashboardCommand 加载配置后运行控制台状态面板（强制面板，不尝试托盘）。
-func runDashboardCommand(args []string, stdout, _ io.Writer) error {
-	fs := flag.NewFlagSet("dashboard", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	path := fs.String("path", "", "配置文件路径")
-	noOpen := fs.Bool("no-open", false, "启动时不自动打开浏览器界面")
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("参数错误: %w", err)
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("用法: fastgithub dashboard [--no-open] [--path 文件]")
-	}
-	cfg, store, _, err := loadConfig(*path)
-	if err != nil {
-		return err
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	return serveWithUI(ctx, cancel, cfg, store, func(addr addresses) error {
-		return dashboard.Run(ctx, dashboardOptions(addr, cfg, *noOpen, stdout))
-	})
-}
-
-// dashboardOptions 把监听地址与配置折算成面板快照。
-func dashboardOptions(addr addresses, cfg *config.Config, noOpen bool, stdout io.Writer) dashboard.Options {
-	return dashboard.Options{
-		Version:   app.Version(),
-		ProxyAddr: addr.proxy.String(),
-		UIAddr:    addr.ui.String(),
-		Intercept: interceptState(cfg),
-		AutoOpen:  !noOpen,
-		Out:       stdout,
-	}
-}
-
-// interceptState 按配置与权限给出面板上的透明拦截状态。
-//
-// 与托盘提示一致：没有管理员权限时 WinDivert 无法启动，只能显示“未启用”。
-func interceptState(cfg *config.Config) string {
-	if cfg.Intercept.Mode == "off" {
-		return "已关闭"
-	}
-	if tray.IsAdmin() {
-		return "已启用"
-	}
-	return "未启用（需要管理员）"
-}
-
-// serveWithUI 在后台跑 app.Run，把实际监听地址交给 runUI（托盘/面板）；
+// serveWithUI 在后台跑 app.Run，把实际监听地址交给 runUI（托盘）；
 // runUI 返回或 ctx 取消后关闭代理并等待 app.Run 返回。
 func serveWithUI(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, store *config.Store, runUI func(addresses) error) error {
 	readyCh := make(chan addresses, 1)
