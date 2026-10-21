@@ -21,8 +21,11 @@ func IsAdmin() bool {
 	return false
 }
 
-// errNoClipboard 表示本机找不到可用的剪贴板命令。
-var errNoClipboard = errors.New("未找到可用的剪贴板命令（pbcopy/xclip/xsel/wl-copy）")
+// AcquireSingleInstance 在非 Windows 平台没有托盘，无需单实例锁；
+// 返回空释放函数，让 CLI 仍能走“托盘不可用则回退控制台”的路径。
+func AcquireSingleInstance() (func(), error) {
+	return func() {}, nil
+}
 
 // CopyToClipboard 在非 Windows 平台尽力调用系统剪贴板命令。
 //
@@ -59,7 +62,7 @@ func clipboardCommand() (*exec.Cmd, error) {
 			return exec.Command(path, candidate[1:]...), nil
 		}
 	}
-	return nil, errNoClipboard
+	return nil, errors.New("未找到可用的剪贴板命令（pbcopy/xclip/xsel/wl-copy）")
 }
 
 // OpenURL 用系统默认浏览器打开 url（Linux 用 xdg-open，macOS 用 open）。
@@ -79,7 +82,6 @@ func OpenURL(url string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("调用 %s 打开界面失败: %w", name, err)
 	}
-	// 不等浏览器退出，只等它被拉起来；后台回收子进程避免僵尸。
 	go func() { _ = cmd.Wait() }()
 	return nil
 }

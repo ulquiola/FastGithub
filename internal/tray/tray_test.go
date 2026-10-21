@@ -75,8 +75,11 @@ func TestMenuItems(t *testing.T) {
 	o.Autostart = false
 	items = MenuItems(o)
 	intercept = items[3]
-	if !intercept.Enabled || !intercept.Checked {
-		t.Fatalf("管理员且拦截开启时该项应可用且勾选：%+v", intercept)
+	if intercept.Enabled {
+		t.Fatalf("拦截项仅展示状态，管理员下也应禁用：%+v", intercept)
+	}
+	if !intercept.Checked {
+		t.Fatalf("管理员且拦截开启时该项仍应勾选：%+v", intercept)
 	}
 	if strings.Contains(intercept.Label, "需管理员") {
 		t.Fatalf("管理员时拦截项不应提示需管理员：%q", intercept.Label)
@@ -88,15 +91,18 @@ func TestMenuItems(t *testing.T) {
 
 func TestAutostartCommand(t *testing.T) {
 	exe := `C:\Program Files\FastGithub\fastgithub.exe`
-	got := autostartCommand(exe)
-	if !strings.HasPrefix(got, `"`+exe+`"`) {
-		t.Fatalf("命令行应以带引号的 exe 开头，实际 %q", got)
+	configPath := `C:\Users\Test User\AppData\Roaming\fastgithub\fastgithub.toml`
+	got := autostartCommand(exe, configPath)
+	want := `"` + exe + `" tray --path "` + configPath + `"`
+	if got != want {
+		t.Fatalf("命令行 = %q，期望 %q", got, want)
 	}
-	if !strings.HasSuffix(got, " tray") {
-		t.Fatalf("命令行应以 tray 结尾，实际 %q", got)
+	// 明确挡住旧格式：登录启动没有工作目录，缺 --path 会读不到配置。
+	if got == `"`+exe+`" tray` {
+		t.Fatalf("命令行缺少 --path（旧格式）：%q", got)
 	}
-	if strings.Count(got, `"`) != 2 {
-		t.Fatalf("命令行只应给 exe 加引号，实际 %q", got)
+	if !strings.Contains(got, `--path "`+configPath+`"`) {
+		t.Fatalf("--path 必须带引号包裹的绝对配置路径，实际 %q", got)
 	}
 }
 

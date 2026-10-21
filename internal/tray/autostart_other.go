@@ -8,6 +8,6 @@ func AutostartEnabled() (bool, error) {
 }
 
 // SetAutostart 在非 Windows 平台没有注册表启动项。
-func SetAutostart(_ bool) error {
+func SetAutostart(_ bool, _ string) error {
 	return ErrUnsupported
 }

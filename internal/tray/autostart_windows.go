@@ -10,14 +10,16 @@ import (
 )
 
 const (
-	// autostartKey 是当前用户的登录启动项所在位置，不需要管理员权限。
-	autostartKey = `Software\Microsoft\Windows\CurrentVersion\Run`
 	// autostartValue 是写入 Run 键的值名。
 	autostartValue = "FastGithub"
 
 	errorFileNotFound = syscall.Errno(2)
 	errorMoreData     = syscall.Errno(234)
 )
+
+// autostartKey 是当前用户的登录启动项所在位置，不需要管理员权限。
+// 变量而非常量：测试会指向临时 HKCU 子键，避免触碰真实的 Run 项。
+var autostartKey = `Software\Microsoft\Windows\CurrentVersion\Run`
 
 var (
 	procRegOpenKeyExW    = advapi32.NewProc("RegOpenKeyExW")
@@ -68,9 +70,13 @@ func AutostartEnabled() (bool, error) {
 }
 
 // SetAutostart 写入或删除当前用户的开机启动项。
-func SetAutostart(enabled bool) error {
+// configPath 是主配置文件的绝对路径，会以 --path 写入命令行。
+func SetAutostart(enabled bool, configPath string) error {
 	if !enabled {
 		return disableAutostart()
+	}
+	if configPath == "" {
+		return fmt.Errorf("缺少主配置文件路径，无法写入开机启动项")
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -89,7 +95,7 @@ func SetAutostart(enabled bool) error {
 	if err != nil {
 		return err
 	}
-	command, err := syscall.UTF16FromString(autostartCommand(exe))
+	command, err := syscall.UTF16FromString(autostartCommand(exe, configPath))
 	if err != nil {
 		return err
 	}

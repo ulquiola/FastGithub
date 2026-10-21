@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sync"
 	"syscall"
 	"unsafe"
 )
@@ -64,8 +65,7 @@ const (
 
 	errorAlreadyExists      = syscall.Errno(183)
 	errorClassAlreadyExists = syscall.Errno(1410)
-	// errnoCancelled 是用户在 UAC 弹窗选择“否”时 ShellExecuteW 留下的 ERROR_CANCELLED。
-	errnoCancelled = syscall.Errno(1223)
+	errorCancelled          = syscall.Errno(1223) // ERROR_CANCELLED：用户取消 UAC
 )
 
 // point 对应 Win32 POINT（两个 32 位有符号整数）。
@@ -136,6 +136,8 @@ var (
 	procDispatchMessageW         = user32.NewProc("DispatchMessageW")
 	procPostQuitMessage          = user32.NewProc("PostQuitMessage")
 	procPostMessageW             = user32.NewProc("PostMessageW")
+	procRegisterWindowMessageW   = user32.NewProc("RegisterWindowMessageW")
+	procIsWindow                 = user32.NewProc("IsWindow")
 	procSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
 	procGetCursorPos             = user32.NewProc("GetCursorPos")
 	procCreatePopupMenu          = user32.NewProc("CreatePopupMenu")
@@ -168,32 +170,78 @@ var (
 
 // trayWindow 保存消息窗口与可变的菜单状态（开机启动勾选态会随点击变化）。
 type trayWindow struct {
-	hwnd syscall.Handle
-	opts Options
+	hwnd  syscall.Handle
+	hicon syscall.Handle
+	opts  Options
 }
 
 // activeWindow 供 WndProc 访问；托盘 Run 已 LockOSThread，进程内同时只有一个实例。
 var activeWindow *trayWindow
 
+// taskbarCreatedMessage 是 Explorer 重启后广播的注册消息；0 表示注册失败。
+// 收到它时需要重新添加图标，否则 Explorer 重启后托盘图标永久消失。
+var taskbarCreatedMessage = registerTaskbarCreatedMessage()
+
+func registerTaskbarCreatedMessage() uint32 {
+	name, err := syscall.UTF16PtrFromString("TaskbarCreated")
+	if err != nil {
+		return 0
+	}
+	r, _, _ := procRegisterWindowMessageW.Call(uintptr(unsafe.Pointer(name)))
+	return uint32(r)
+}
+
+// shellNotifyIcon 是对 Shell_NotifyIconW 的唯一封装，测试中可替换为成功且记录
+// 消息的假实现，从而在没有 explorer.exe 的会话里验证 Run 的清理路径。
+var shellNotifyIcon = shellNotifyIconW
+
+func shellNotifyIconW(message uint32, nid *notifyIconData) (bool, error) {
+	r, _, errno := procShell_NotifyIconW.Call(uintptr(message), uintptr(unsafe.Pointer(nid)))
+	if r == 0 {
+		if errno == nil {
+			return false, errors.New("Shell_NotifyIconW 返回 FALSE")
+		}
+		return false, errno
+	}
+	return true, nil
+}
+
+// instanceMutexName 与回退名可在测试中替换，避免与真实托盘实例互相影响。
+var (
+	instanceMutexName         = `Global\FastGithubTray`
+	instanceFallbackMutexName = `Local\FastGithubTray`
+)
+
+// AcquireSingleInstance 在启动代理前抢占单实例互斥体，命中时返回 ErrAlreadyRunning。
+// 返回的 release 必须在本进程退出前调用；重复调用是安全的。
+func AcquireSingleInstance() (release func(), err error) {
+	mutex, already, err := createInstanceMutex(instanceMutexName)
+	if err != nil {
+		// 普通用户可能没有创建 Global\ 命名对象的权限，退回当前会话命名。
+		mutex, already, err = createInstanceMutex(instanceFallbackMutexName)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("创建单实例互斥体失败: %w", err)
+	}
+	if already {
+		return nil, ErrAlreadyRunning
+	}
+	if mutex == 0 {
+		return func() {}, nil
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() { procCloseHandle.Call(uintptr(mutex)) })
+	}, nil
+}
+
 // Run 在通知区域显示图标并进入消息循环，直到 ctx 取消或用户选择退出。
+//
+// 单实例互斥体不在这里获取：调用方应在启动代理之前调用 AcquireSingleInstance，
+// 否则第二个实例会先绑定端口失败、再发现已有实例。
 func Run(ctx context.Context, o Options) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-
-	mutex, already, err := createInstanceMutex(`Global\FastGithubTray`)
-	if err != nil {
-		// 普通用户可能没有创建 Global\ 命名对象的权限，退回当前会话命名。
-		mutex, already, err = createInstanceMutex(`Local\FastGithubTray`)
-	}
-	if err != nil {
-		return fmt.Errorf("创建单实例互斥体失败: %w", err)
-	}
-	if already {
-		return ErrAlreadyRunning
-	}
-	if mutex != 0 {
-		defer procCloseHandle.Call(uintptr(mutex))
-	}
 
 	hicon, ownedIcon := loadAppIcon()
 	if hicon != 0 && ownedIcon {
@@ -205,7 +253,7 @@ func Run(ctx context.Context, o Options) error {
 		return err
 	}
 
-	w := &trayWindow{hwnd: hwnd, opts: o}
+	w := &trayWindow{hwnd: hwnd, hicon: hicon, opts: o}
 	activeWindow = w
 	defer func() { activeWindow = nil }()
 
@@ -288,6 +336,10 @@ func createMessageWindow(hicon syscall.Handle) (syscall.Handle, error) {
 
 // wndProc 是隐藏窗口的消息处理函数，必须用 syscall.NewCallback 注册。
 func wndProc(hwnd syscall.Handle, message uint32, wParam, lParam uintptr) uintptr {
+	if taskbarCreatedMessage != 0 && message == taskbarCreatedMessage {
+		handleTaskbarCreated()
+		return 0
+	}
 	switch message {
 	case trayMessage:
 		// NOTIFYICON_VERSION_4 把通知码放在 lParam 低 16 位；旧版直接就是
@@ -304,6 +356,16 @@ func wndProc(hwnd syscall.Handle, message uint32, wParam, lParam uintptr) uintpt
 	}
 	r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, lParam)
 	return r
+}
+
+// handleTaskbarCreated 在 Explorer 重启后重新添加图标。
+// 失败无处提示，也不应打断消息循环；下一次 Explorer 重启会再次尝试。
+func handleTaskbarCreated() {
+	w := activeWindow
+	if w == nil || w.hwnd == 0 {
+		return
+	}
+	_ = addNotifyIcon(w.hwnd, w.hicon, StatusText(w.opts))
 }
 
 func handleTrayEvent(event uint32) {
@@ -403,7 +465,7 @@ func (w *trayWindow) handleCommand(id int) {
 		// 仅展示状态：运行中切换拦截需要重启代理，当前版本只通过配置启停。
 	case IDAutostart:
 		enabled := !w.opts.Autostart
-		if err := SetAutostart(enabled); err != nil {
+		if err := SetAutostart(enabled, w.opts.ConfigPath); err != nil {
 			showError(w.hwnd, "设置开机启动失败: "+err.Error())
 			return
 		}
@@ -436,46 +498,44 @@ func openUI() {
 
 // installCertElevated 以管理员身份重新运行自身 install-cert；用户取消 UAC 视为无操作。
 func installCertElevated(hwnd syscall.Handle) error {
-	_ = runElevated(hwnd, "install-cert")
-	return nil
-}
-
-// runElevated 以管理员身份重新运行自身并传入 params；hwnd 只作为 UAC 提示的父窗口。
-func runElevated(hwnd syscall.Handle, params string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("定位可执行文件失败: %w", err)
 	}
-	return shellExecute(hwnd, "runas", exe, params, swHide)
-}
-
-// CopyToClipboard 把 text 写入系统剪贴板（CF_UNICODETEXT）。
-//
-// 控制台面板没有托盘窗口，传 hwnd=0 让系统按当前前台窗口归属剪贴板。
-func CopyToClipboard(text string) error {
-	return copyText(0, text)
-}
-
-// OpenURL 用系统默认浏览器打开 url。
-func OpenURL(url string) error {
-	if url == "" {
-		return errors.New("URL 为空")
-	}
-	return shellExecute(0, "open", url, "", swShowNormal)
-}
-
-// RunElevated 以管理员身份重新运行自身并传入 params（会触发 UAC）。
-//
-// 用户取消 UAC 属于主动放弃，返回 nil 而不是错误。
-func RunElevated(params string) error {
-	err := runElevated(0, params)
-	if errors.Is(err, errnoCancelled) {
+	err = shellExecute(hwnd, "runas", exe, "install-cert", swHide)
+	if err == nil {
 		return nil
 	}
-	return err
+	var execErr *shellExecuteError
+	if errors.As(err, &execErr) && execErr.cancelled() {
+		return nil
+	}
+	return fmt.Errorf("以管理员身份启动 install-cert 失败: %w", err)
 }
 
-func shellExecute(hwnd syscall.Handle, op, file, params string, show int32) error {
+// shellExecute 可在测试中替换，避免真的弹出 UAC 对话框。
+var shellExecute = shellExecuteImpl
+
+// shellExecuteError 保留 ShellExecuteW 的返回码与 GetLastError，便于区分用户取消。
+type shellExecuteError struct {
+	op    string
+	code  uintptr
+	errno syscall.Errno
+}
+
+func (e *shellExecuteError) Error() string {
+	if e.errno != 0 {
+		return fmt.Sprintf("ShellExecuteW(%s) 失败（代码 %d）: %v", e.op, e.code, e.errno)
+	}
+	return fmt.Sprintf("ShellExecuteW(%s) 失败（代码 %d）", e.op, e.code)
+}
+
+// cancelled 报告用户是否在 UAC 提示中点了取消。
+func (e *shellExecuteError) cancelled() bool {
+	return e.code == uintptr(errorCancelled) || e.errno == errorCancelled
+}
+
+func shellExecuteImpl(hwnd syscall.Handle, op, file, params string, show int32) error {
 	opPtr, err := syscall.UTF16PtrFromString(op)
 	if err != nil {
 		return err
@@ -499,7 +559,8 @@ func shellExecute(hwnd syscall.Handle, op, file, params string, show int32) erro
 		uintptr(show),
 	)
 	if r <= 32 {
-		return fmt.Errorf("ShellExecuteW(%s) 失败（代码 %d）: %w", op, r, errno)
+		code, _ := errno.(syscall.Errno)
+		return &shellExecuteError{op: op, code: r, errno: code}
 	}
 	return nil
 }
@@ -563,14 +624,14 @@ func addNotifyIcon(hwnd, hicon syscall.Handle, tip string) error {
 		HIcon:            hicon,
 	}
 	setFixedUTF16(nid.SzTip[:], tip)
-	if r, _, errno := procShell_NotifyIconW.Call(nimAdd, uintptr(unsafe.Pointer(&nid))); r == 0 {
-		return fmt.Errorf("添加通知区域图标失败: %w", errno)
+	if ok, err := shellNotifyIcon(nimAdd, &nid); !ok {
+		return fmt.Errorf("添加通知区域图标失败: %w", err)
 	}
 	nid.UVersion = notifyIconVersion4
 	// 设置版本失败不致命：图标已经加上，只是回调保持旧格式，事件处理两者都兼容。
-	procShell_NotifyIconW.Call(nimSetVersion, uintptr(unsafe.Pointer(&nid)))
+	shellNotifyIcon(nimSetVersion, &nid)
 	nid.UFlags = nifShowTip
-	procShell_NotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(&nid)))
+	shellNotifyIcon(nimModify, &nid)
 	return nil
 }
 
@@ -580,7 +641,7 @@ func removeNotifyIcon(hwnd syscall.Handle) {
 		HWnd:   hwnd,
 		UID:    trayIconID,
 	}
-	procShell_NotifyIconW.Call(nimDelete, uintptr(unsafe.Pointer(&nid)))
+	shellNotifyIcon(nimDelete, &nid)
 }
 
 // setFixedUTF16 把 s 写进定长 UTF-16 缓冲区，保证以 NUL 结尾且不越界。
@@ -634,4 +695,36 @@ func IsAdmin() bool {
 		uintptr(unsafe.Pointer(&size)),
 	)
 	return r != 0 && elevated != 0
+}
+
+// CopyToClipboard 把 text 写入系统剪贴板（CF_UNICODETEXT）。
+// 控制台面板没有托盘窗口，传 hwnd=0 让系统按当前前台窗口归属剪贴板。
+func CopyToClipboard(text string) error {
+	return copyText(0, text)
+}
+
+// OpenURL 用系统默认浏览器打开 url。
+func OpenURL(url string) error {
+	if url == "" {
+		return errors.New("URL 为空")
+	}
+	return shellExecute(0, "open", url, "", swShowNormal)
+}
+
+// RunElevated 以管理员身份重新运行自身并传入 params（会触发 UAC）。
+// 用户取消 UAC 属于主动放弃，返回 nil 而不是错误。
+func RunElevated(params string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("定位可执行文件失败: %w", err)
+	}
+	err = shellExecute(0, "runas", exe, params, swHide)
+	if err == nil {
+		return nil
+	}
+	var execErr *shellExecuteError
+	if errors.As(err, &execErr) && execErr.cancelled() {
+		return nil
+	}
+	return fmt.Errorf("以管理员身份启动 %s 失败: %w", params, err)
 }
