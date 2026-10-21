@@ -67,18 +67,20 @@ go srv.ServeTLS(&singleConnListener{conn: rawConn}, "", "")
 
 `TLSConfig` 已有 `GetCertificate` 时 `ServeTLS("", "")` 不会尝试加载证书文件。若该路径在目标 Go 版本上失效，备选是显式使用 `http2.Server`——但那需要 `golang.org/x/net/http2`，会破坏零依赖约束，因此优先标准库路径。
 
+**实现状态（v0.4.0）**：已按上述方式落地。`serveMITM` / `serveTransparentTLS` 统一走 `serveOneTLS`，原始连接直接交给 `ServeTLS`；`serveConn` 用 `ConnState` 等待连接关闭，握手失败由客户端感知，`ErrorLog` 指向 `io.Discard` 避免刷屏。端到端测试 `TestMITMHTTP2EndToEnd` 断言浏览器侧和上游侧都是 h2。
+
 ### 3.3 上游 transport
 
 ```go
 // h2 开启
 &http.Transport{
-    DialTLSContext:     d.DialTLS,   // 已通告 h2
+    DialTLSContext:     d.DialTLSH2, // 通告 h2,http/1.1
     ForceAttemptHTTP2:  true,
     // 不设置 TLSNextProto
 }
 // h2 关闭（等价 v0.3.6）
 &http.Transport{
-    DialTLSContext:     d.DialTLS,
+    DialTLSContext:     d.DialTLS,   // 不发送 ALPN
     ForceAttemptHTTP2:  false,
     TLSNextProto:       map[string]func(string, *tls.Conn) http.RoundTripper{},
 }
