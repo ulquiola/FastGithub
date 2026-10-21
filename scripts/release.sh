@@ -44,6 +44,9 @@ for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 d
     GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS -H=windowsgui" -o "$dir/fastgithub-tray.exe" ./cmd/fastgithub-tray
   fi
   cp fastgithub.toml README.md LICENSE "$dir/"
+  if [ "$os" = "windows" ]; then
+    cp fastgithub.ico "$dir/"   # 供桌面快捷方式自定义图标
+  fi
   cp -R conf.d "$dir/"
   # WinDivert 2.2.2 只有 x86/x64 驱动，arm64 包不携带。
   if [ -d windivert ] && [ "$os" = "windows" ] && [ "$arch" = "amd64" ]; then
