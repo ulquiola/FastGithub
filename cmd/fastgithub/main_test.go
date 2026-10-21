@@ -37,22 +37,8 @@ func stubTray(t *testing.T, err error) *[]string {
 	return &calls
 }
 
-// stubDashboard 把面板入口换成记录调用的假实现，避免测试进程监听端口并阻塞。
-func stubDashboard(t *testing.T, err error) *[]string {
-	t.Helper()
-	var calls []string
-	old := startDashboard
-	startDashboard = func(args []string, stdout, stderr io.Writer) error {
-		calls = append(calls, strings.Join(args, " "))
-		return err
-	}
-	t.Cleanup(func() { startDashboard = old })
-	return &calls
-}
-
 func TestRunNoArgsStartsTray(t *testing.T) {
 	calls := stubTray(t, nil)
-	dash := stubDashboard(t, nil)
 	var stdout, stderr bytes.Buffer
 	if code := run(nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d，期望 0；stderr=%s", code, stderr.String())
@@ -60,109 +46,31 @@ func TestRunNoArgsStartsTray(t *testing.T) {
 	if len(*calls) != 1 || (*calls)[0] != "" {
 		t.Fatalf("无参数应调用托盘一次，实际 %q", *calls)
 	}
-	if len(*dash) != 0 {
-		t.Fatalf("托盘可用时不应启动面板，实际 %q", *dash)
-	}
 }
 
-// 无参数时托盘不可用（本机无 Explorer 的典型情形）→ 自动进入控制台面板。
-func TestRunNoArgsFallsBackToDashboard(t *testing.T) {
+// 无参数时托盘失败必须直接报错，不再降级到任何面板。
+func TestRunNoArgsTrayFailureIsLoud(t *testing.T) {
 	stubTray(t, errors.New("添加通知区域图标失败: Access is denied"))
-	dash := stubDashboard(t, nil)
 	var stdout, stderr bytes.Buffer
-	if code := run(nil, &stdout, &stderr); code != 0 {
-		t.Fatalf("exit = %d，期望 0；stderr=%s", code, stderr.String())
-	}
-	if len(*dash) != 1 || (*dash)[0] != "" {
-		t.Fatalf("托盘失败后应启动面板一次（无参数），实际 %q", *dash)
+	if code := run(nil, &stdout, &stderr); code != 1 {
+		t.Fatalf("exit = %d，期望 1", code)
 	}
 	if !strings.Contains(stderr.String(), "Access is denied") {
-		t.Fatalf("stderr 应说明托盘失败原因，实际 %q", stderr.String())
+		t.Fatalf("stderr 应说明失败原因，实际 %q", stderr.String())
 	}
 }
 
-// 托盘其实在运行（单实例互斥体命中）不算“托盘不可用”：友好退出，不再另起面板。
+// 已有托盘实例属于正常退出，不再另起面板。
 func TestRunNoArgsTrayAlreadyRunning(t *testing.T) {
 	stubTray(t, tray.ErrAlreadyRunning)
-	dash := stubDashboard(t, nil)
 	var stdout, stderr bytes.Buffer
 	if code := run(nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d，期望 0；stderr=%s", code, stderr.String())
-	}
-	if len(*dash) != 0 {
-		t.Fatalf("已有托盘实例时不应启动面板，实际 %q", *dash)
 	}
 	if !strings.Contains(stdout.String(), "已有一个 FastGithub 托盘实例") {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }
-
-// 无参时 --no-open 需要一路传到面板（托盘可用时它不产生副作用）。
-func TestRunNoOpenFlag(t *testing.T) {
-	t.Run("托盘不可用时透传", func(t *testing.T) {
-		stubTray(t, errors.New("没有桌面会话"))
-		dash := stubDashboard(t, nil)
-		var stdout, stderr bytes.Buffer
-		if code := run([]string{"--no-open"}, &stdout, &stderr); code != 0 {
-			t.Fatalf("exit = %d，期望 0；stderr=%s", code, stderr.String())
-		}
-		if len(*dash) != 1 || (*dash)[0] != "--no-open" {
-			t.Fatalf("面板应收到 --no-open，实际 %q", *dash)
-		}
-	})
-	t.Run("托盘可用时只托盘", func(t *testing.T) {
-		calls := stubTray(t, nil)
-		dash := stubDashboard(t, nil)
-		var stdout, stderr bytes.Buffer
-		if code := run([]string{"--no-open"}, &stdout, &stderr); code != 0 {
-			t.Fatalf("exit = %d，期望 0；stderr=%s", code, stderr.String())
-		}
-		if len(*calls) != 1 || (*calls)[0] != "" {
-			t.Fatalf("托盘参数 = %q", *calls)
-		}
-		if len(*dash) != 0 {
-			t.Fatalf("托盘可用时不应启动面板，实际 %q", *dash)
-		}
-	})
-}
-
-// dashboard 子命令强制面板，不尝试托盘。
-func TestRunDashboardSubcommand(t *testing.T) {
-	trayCalls := stubTray(t, nil)
-	dash := stubDashboard(t, nil)
-	var stdout, stderr bytes.Buffer
-	if code := run([]string{"dashboard", "--no-open"}, &stdout, &stderr); code != 0 {
-		t.Fatalf("exit = %d，期望 0；stderr=%s", code, stderr.String())
-	}
-	if len(*trayCalls) != 0 {
-		t.Fatalf("dashboard 子命令不应尝试托盘，实际 %q", *trayCalls)
-	}
-	if len(*dash) != 1 || (*dash)[0] != "--no-open" {
-		t.Fatalf("面板参数 = %q", *dash)
-	}
-}
-
-func TestRunDashboardFailure(t *testing.T) {
-	stubDashboard(t, errors.New("监听代理端口失败"))
-	var stdout, stderr bytes.Buffer
-	if code := run([]string{"dashboard"}, &stdout, &stderr); code != 1 {
-		t.Fatalf("exit = %d，期望 1", code)
-	}
-	if !strings.Contains(stderr.String(), "监听代理端口失败") {
-		t.Fatalf("stderr = %q", stderr.String())
-	}
-}
-
-func TestRunDashboardBadFlag(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	if code := run([]string{"dashboard", "--nope"}, &stdout, &stderr); code != 1 {
-		t.Fatalf("exit = %d，期望 1", code)
-	}
-	if !strings.Contains(stderr.String(), "参数错误") {
-		t.Fatalf("stderr = %q", stderr.String())
-	}
-}
-
 func TestRunTraySubcommand(t *testing.T) {
 	calls := stubTray(t, nil)
 	var stdout, stderr bytes.Buffer
@@ -176,7 +84,6 @@ func TestRunTraySubcommand(t *testing.T) {
 
 func TestRunTrayFailure(t *testing.T) {
 	stubTray(t, errors.New("添加通知区域图标失败"))
-	dash := stubDashboard(t, nil)
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"tray"}, &stdout, &stderr); code != 1 {
 		t.Fatalf("exit = %d，期望 1", code)
@@ -184,9 +91,7 @@ func TestRunTrayFailure(t *testing.T) {
 	if !strings.Contains(stderr.String(), "添加通知区域图标失败") {
 		t.Fatalf("stderr 应包含失败原因，实际 %q", stderr.String())
 	}
-	if len(*dash) != 0 {
-		t.Fatalf("tray 子命令失败不应降级为面板，实际 %q", *dash)
-	}
+
 }
 
 func TestRunHelp(t *testing.T) {
@@ -196,9 +101,8 @@ func TestRunHelp(t *testing.T) {
 			if code := run([]string{arg}, &stdout, &stderr); code != 0 {
 				t.Fatalf("exit = %d，期望 0", code)
 			}
-			if !strings.Contains(stdout.String(), "用法") || !strings.Contains(stdout.String(), "tray") ||
-				!strings.Contains(stdout.String(), "dashboard") {
-				t.Fatalf("帮助应打印用法并提到 tray/dashboard，实际 %q", stdout.String())
+			if !strings.Contains(stdout.String(), "用法") || !strings.Contains(stdout.String(), "tray") {
+				t.Fatalf("帮助应打印用法并提到 tray，实际 %q", stdout.String())
 			}
 			if stderr.String() != "" {
 				t.Fatalf("帮助不应写 stderr，实际 %q", stderr.String())

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -729,4 +730,30 @@ func RunElevated(params string) error {
 		return nil
 	}
 	return fmt.Errorf("以管理员身份启动 %s 失败: %w", params, err)
+}
+
+// RelaunchElevated 以管理员身份重新运行当前程序并传入 args（会触发 UAC）。
+// 用户取消时返回明确错误，调用方应终止而不是静默继续。
+func RelaunchElevated(args []string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("定位可执行文件失败: %w", err)
+	}
+	err = shellExecute(0, "runas", exe, quoteArgs(args), swShowNormal)
+	if err == nil {
+		return nil
+	}
+	var execErr *shellExecuteError
+	if errors.As(err, &execErr) && execErr.cancelled() {
+		return errors.New("用户取消了管理员权限请求")
+	}
+	return fmt.Errorf("请求管理员权限失败: %w", err)
+}
+
+func quoteArgs(args []string) string {
+	parts := make([]string, len(args))
+	for i, a := range args {
+		parts[i] = `"` + strings.ReplaceAll(a, `"`, `\"`) + `"`
+	}
+	return strings.Join(parts, " ")
 }

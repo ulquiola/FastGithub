@@ -219,3 +219,11 @@ func TestInstallCertElevated(t *testing.T) {
 		})
 	}
 }
+
+func TestQuoteArgs(t *testing.T) {
+	got := quoteArgs([]string{"tray", `--path`, `C:\a b\fastgithub.toml`})
+	want := `"tray" "--path" "C:\a b\fastgithub.toml"`
+	if got != want {
+		t.Fatalf("quoteArgs = %q，期望 %q", got, want)
+	}
+}

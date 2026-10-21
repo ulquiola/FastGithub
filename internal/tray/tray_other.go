@@ -90,3 +90,8 @@ func OpenURL(url string) error {
 func RunElevated(_ string) error {
 	return errors.New("当前平台不支持自动提权，请以 root 运行 fastgithub install-cert")
 }
+
+// RelaunchElevated 在非 Windows 平台不可用。
+func RelaunchElevated(_ []string) error {
+	return ErrUnsupported
+}
