@@ -191,9 +191,15 @@ func isAuthError(err error) bool {
 }
 
 func loginKeychainPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
+	// macOS 上 HOME 一定存在，优先取它：既符合 darwin 的真实语义，也让
+	// 在其它平台模拟 darwin 的测试可以通过 t.Setenv("HOME", …) 注入路径。
+	home := os.Getenv("HOME")
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
 	}
 	return filepath.Join(home, "Library", "Keychains", "login.keychain-db"), nil
 }
