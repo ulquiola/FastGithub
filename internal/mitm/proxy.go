@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -29,6 +31,7 @@ type Server struct {
 	idle    time.Duration
 	logger  Logger
 	stats   http.Handler
+	http2   bool
 }
 
 func NewServer(store *config.Store, d *dialer.Dialer, ca *certs.Authority, reverse http.Handler, idle time.Duration) *Server {
@@ -40,6 +43,9 @@ func NewServer(store *config.Store, d *dialer.Dialer, ca *certs.Authority, rever
 
 // SetLogger 设置请求日志接收器。
 func (s *Server) SetLogger(l Logger) { s.logger = l }
+
+// SetHTTP2 决定是否向客户端通告并承载 HTTP/2。
+func (s *Server) SetHTTP2(enabled bool) { s.http2 = enabled }
 
 // ServeTLS 处理已接受的透明 TLS 连接（443 入口）。
 func (s *Server) ServeTLS(ctx context.Context, conn net.Conn) {
@@ -187,60 +193,70 @@ func (s *Server) serveConnect(ctx context.Context, conn net.Conn, br *bufio.Read
 }
 
 func (s *Server) serveMITM(ctx context.Context, conn net.Conn, connectHost string) {
-	tlsConn := tls.Server(conn, &tls.Config{
+	s.serveOneTLS(conn, s.serverTLSConfig(connectHost), s.reverse)
+}
+
+func (s *Server) serveTransparentTLS(ctx context.Context, conn net.Conn) {
+	s.serveOneTLS(conn, s.serverTLSConfig(""), s.reverse)
+}
+
+// serverTLSConfig 按 SNI 选择叶子证书；fallbackName 为空时要求客户端必须带 SNI。
+func (s *Server) serverTLSConfig(fallbackName string) *tls.Config {
+	cfg := &tls.Config{
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			name := hello.ServerName
 			if name == "" {
-				name = connectHost
+				name = fallbackName
+			}
+			if name == "" {
+				return nil, errNoSNI
 			}
 			return s.ca.LeafFor(name)
 		},
 		MinVersion: tls.VersionTLS12,
-	})
-	handshakeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
-		conn.Close()
-		return
 	}
-	s.serveOneHTTP(tlsConn, s.reverse)
+	if s.http2 {
+		cfg.NextProtos = []string{"h2", "http/1.1"}
+	}
+	return cfg
 }
 
-func (s *Server) serveTransparentTLS(ctx context.Context, conn net.Conn) {
-	tlsConn := tls.Server(conn, &tls.Config{
-		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			if hello.ServerName == "" {
-				return nil, errNoSNI
-			}
-			return s.ca.LeafFor(hello.ServerName)
-		},
-		MinVersion: tls.VersionTLS12,
-	})
-	handshakeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
-		conn.Close()
-		return
-	}
-	s.serveOneHTTP(tlsConn, s.reverse)
-}
-
-// serveOneHTTP 把连接交给一次性 http.Server，并等待连接真正关闭后再返回，
-// 这样上层注册表能在正确的生命周期内跟踪连接。连接保持原始类型，
-// 否则 http.Server 无法识别 *tls.Conn、r.TLS 会为空。
+// serveOneHTTP 服务明文 HTTP 连接（80 入口）。
 func (s *Server) serveOneHTTP(conn net.Conn, handler http.Handler) {
+	s.serveConn(conn, nil, handler)
+}
+
+// serveOneTLS 把原始连接交给 ServeTLS：由它完成握手（GetCertificate 选叶证书）
+// 并注册标准库 h2 处理器，这是启用 h2 的唯一标准库路径。
+func (s *Server) serveOneTLS(conn net.Conn, cfg *tls.Config, handler http.Handler) {
+	s.serveConn(conn, cfg, handler)
+}
+
+// serveConn 把连接交给一次性 http.Server，并等待连接真正关闭后再返回，
+// 这样上层注册表能在正确的生命周期内跟踪连接。
+func (s *Server) serveConn(conn net.Conn, tlsCfg *tls.Config, handler http.Handler) {
 	done := make(chan struct{})
 	var once sync.Once
 	srv := &http.Server{
 		Handler:           handler,
+		TLSConfig:         tlsCfg,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       5 * time.Minute,
+		// 握手失败由客户端感知即可，不要往 stderr 刷屏。
+		ErrorLog: log.New(io.Discard, "", 0),
 		ConnState: func(_ net.Conn, state http.ConnState) {
 			if state == http.StateClosed || state == http.StateHijacked {
 				once.Do(func() { close(done) })
 			}
 		},
 	}
-	go srv.Serve(&singleConnListener{conn: conn})
+	l := &singleConnListener{conn: conn}
+	go func() {
+		if tlsCfg != nil {
+			_ = srv.ServeTLS(l, "", "")
+			return
+		}
+		_ = srv.Serve(l)
+	}()
 	<-done
 }
