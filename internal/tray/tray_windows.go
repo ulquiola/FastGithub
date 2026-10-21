@@ -708,7 +708,9 @@ func OpenURL(url string) error {
 	if url == "" {
 		return errors.New("URL 为空")
 	}
-	return shellExecute(0, "open", url, "", swShowNormal)
+	// 交给已经以普通权限运行的 Explorer 打开，避免从提权进程直接 ShellExecute
+	// 把浏览器也拉成管理员（Edge/Chrome 会因此拒绝与普通实例共存）。
+	return shellExecute(0, "open", "explorer.exe", url, swShowNormal)
 }
 
 // RunElevated 以管理员身份重新运行自身并传入 params（会触发 UAC）。
