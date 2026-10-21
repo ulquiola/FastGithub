@@ -67,7 +67,7 @@ WinDivert 不随包内嵌，需把 `WinDivert.dll` 与 `WinDivert64.sys` 放到 
 
 ## Windows 托盘
 
-双击 `fastgithub.exe`（或执行 `fastgithub tray`）会在启动代理的同时把图标放进通知区域：左键单击/双击打开 Web UI，右键菜单提供打开界面、复制代理地址、以管理员身份安装证书（触发 UAC）、拦截状态、开机启动与退出。退出会先关闭代理再移除图标；没有桌面会话时自动回退为控制台 `run` 并打印原因，`fastgithub run` 行为不变。开机启动写入当前用户 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，不需要管理员权限。
+双击 `fastgithub-tray.exe`（GUI 子系统，无控制台黑框）或 `fastgithub.exe`（等价于 `fastgithub tray`）会以管理员身份启动代理并把图标放进通知区域：左键单击/双击打开 Web UI，右键菜单提供打开界面、复制代理地址、拦截状态、开机启动与退出。证书安装请到 Web UI 的“证书信任”区块完成。未提权时会自动请求 UAC，取消则报错退出，不再回退控制台面板；`fastgithub run` 行为不变。开机启动写入当前用户 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，不需要管理员权限。
 
 ## 目标平台
 

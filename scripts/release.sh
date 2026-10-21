@@ -39,6 +39,10 @@ for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 d
   fi
   echo "release $name ($VERSION)"
   GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "$dir/$exe" ./cmd/fastgithub
+  # 托盘启动器用 GUI 子系统，双击时不会弹控制台黑框。
+  if [ "$os" = "windows" ]; then
+    GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS -H=windowsgui" -o "$dir/fastgithub-tray.exe" ./cmd/fastgithub-tray
+  fi
   cp fastgithub.toml README.md LICENSE "$dir/"
   cp -R conf.d "$dir/"
   # WinDivert 2.2.2 只有 x86/x64 驱动，arm64 包不携带。
