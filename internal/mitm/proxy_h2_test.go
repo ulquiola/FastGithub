@@ -77,8 +77,9 @@ func TestServeOneTLSFallsBackToHTTP1(t *testing.T) {
 	ln, roots := startOneTLS(t, s)
 
 	client := &http.Client{Transport: &http.Transport{
-		TLSClientConfig:   &tls.Config{RootCAs: roots, ServerName: "example.com"},
-		ForceAttemptHTTP2: false,
+		TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: "example.com"},
+		// 客户端主动通告 h2，服务端也必须拒绝，才能证明开关真的生效。
+		ForceAttemptHTTP2: true,
 	}}
 	defer client.CloseIdleConnections()
 	resp, err := client.Get("https://" + ln.Addr().String() + "/")

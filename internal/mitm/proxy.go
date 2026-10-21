@@ -250,6 +250,11 @@ func (s *Server) serveConn(conn net.Conn, tlsCfg *tls.Config, handler http.Handl
 			}
 		},
 	}
+	if tlsCfg != nil && !s.http2 {
+		// ServeTLS 在 TLSNextProto 为 nil 时会自动追加 h2 并注册处理器；
+		// 非 nil 空 map 是关闭它的唯一方式，光去掉 NextProtos 不够。
+		srv.TLSNextProto = map[string]func(*http.Server, *tls.Conn, http.Handler){}
+	}
 	l := &singleConnListener{conn: conn}
 	go func() {
 		if tlsCfg != nil {

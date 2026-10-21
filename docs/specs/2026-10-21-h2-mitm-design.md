@@ -69,6 +69,8 @@ go srv.ServeTLS(&singleConnListener{conn: rawConn}, "", "")
 
 **实现状态（v0.4.0）**：已按上述方式落地。`serveMITM` / `serveTransparentTLS` 统一走 `serveOneTLS`，原始连接直接交给 `ServeTLS`；`serveConn` 用 `ConnState` 等待连接关闭，握手失败由客户端感知，`ErrorLog` 指向 `io.Discard` 避免刷屏。端到端测试 `TestMITMHTTP2EndToEnd` 断言浏览器侧和上游侧都是 h2。
 
+**关闭 h2 的坑（v0.4.1 修复）**：`ServeTLS` 在 `TLSNextProto` 为 nil 时会自动把 `h2` 追加到 `NextProtos` 并注册处理器。因此 `http2=false` 时必须同时把 `Server.TLSNextProto` 设为非 nil 空 map，仅从 `NextProtos` 移除 h2 无效。
+
 ### 3.3 上游 transport
 
 ```go
