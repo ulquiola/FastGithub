@@ -2,10 +2,21 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if ! command -v zip >/dev/null 2>&1; then
-  echo "需要 zip 命令" >&2
-  exit 1
-fi
+# 打包工具依次回退：zip → PowerShell Compress-Archive → bsdtar（Windows 自带）。
+archive() {
+  local name="$1"
+  if command -v zip >/dev/null 2>&1; then
+    (cd dist && zip -qr "$name.zip" "$name")
+  elif command -v powershell.exe >/dev/null 2>&1; then
+    powershell.exe -NoProfile -NonInteractive -Command \
+      "Compress-Archive -Path 'dist/$name' -DestinationPath 'dist/$name.zip' -Force"
+  elif command -v tar >/dev/null 2>&1; then
+    (cd dist && tar -a -cf "$name.zip" "$name")
+  else
+    echo "缺少打包工具：需要 zip、powershell.exe 或 tar 之一" >&2
+    exit 1
+  fi
+}
 
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
 COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo none)"
@@ -38,6 +49,6 @@ for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 d
     fi
     cp -R windivert "$dir/"
   fi
-  (cd dist && zip -qr "$name.zip" "$name")
+  archive "$name"
 done
 echo "发布产物已生成到 dist/"

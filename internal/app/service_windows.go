@@ -3,6 +3,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"syscall"
 	"time"
@@ -20,6 +21,7 @@ const (
 	serviceQueryStatus     = 0x0004
 	serviceStopped         = 1
 	errorServiceExists     = syscall.Errno(1073)
+	errorServiceNotExist   = syscall.Errno(1060)
 )
 
 type serviceStatus struct {
@@ -109,6 +111,10 @@ func UninstallService() error {
 
 	service, err := openService(manager, serviceAllAccess|serviceQueryStatus)
 	if err != nil {
+		// 服务本来就不存在时视为卸载成功，保证 uninstall 幂等。
+		if isServiceNotExist(err) {
+			return nil
+		}
 		return err
 	}
 	defer procCloseServiceHandle.Call(uintptr(service))
@@ -118,6 +124,11 @@ func UninstallService() error {
 		return fmt.Errorf("DeleteService 失败: %w", errno)
 	}
 	return nil
+}
+
+// isServiceNotExist 判断 OpenService 的错误是否为 ERROR_SERVICE_DOES_NOT_EXIST。
+func isServiceNotExist(err error) bool {
+	return errors.Is(err, errorServiceNotExist)
 }
 
 func StartService() error {
