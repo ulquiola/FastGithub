@@ -33,7 +33,9 @@ $ fastgithub version
 
 被接管的域名默认在“浏览器 ↔ 代理 ↔ 上游”两段都使用 HTTP/2（`[server] http2 = true`）；客户端不支持时自动回退 h1.1。设为 `false` 时行为与 v0.3.6 完全一致。WebSocket/协议升级固定走独立的 h1.1 出口。
 
-macOS 没有透明拦截，浏览器需要走系统代理：Web UI 的“系统代理”卡片可一键启用/关闭当前主网络服务（如 Wi-Fi）的 HTTP/HTTPS 代理，指向 `127.0.0.1:38457`；也可以手动配置代理或把 PAC 地址 `http://127.0.0.1:38457/` 填入“自动代理配置”。进程正常退出时会自动关闭指向本程序的系统代理，避免整机断网。Windows/Linux 该接口返回“不支持”。
+`server.singleton`（默认 `true`）会阻止同一台机器上同时运行两个代理：Unix 在配置目录创建 `fastgithub.lock` 并用 `flock` 加锁，Windows 使用命名互斥量（`Global\FastGithubProxy`，权限不足时退回当前会话）。服务模式与手工 `run` 共用同一把锁，第二个实例会直接报错退出。
+
+macOS 没有透明拦截，浏览器需要走系统代理：Web UI 的“系统代理”卡片可一键启用/关闭当前主网络服务（如 Wi-Fi）的 HTTP/HTTPS 代理，指向 `127.0.0.1:38457`；也可以手动配置代理或把 PAC 地址 `http://127.0.0.1:38457/` 填入“自动代理配置”。进程正常退出时会自动关闭指向本程序的系统代理，避免整机断网。默认路由是 VPN（`utun*`）时无法用 `networksetup` 定位网络服务，卡片会显示“不可用”并提示在 VPN 软件中设置 `127.0.0.1:38457`。Windows/Linux 该接口返回“不支持”。
 
 `install-cert` 会在 `cacert/` 生成 CA（已存在则复用），并把证书加入系统信任库；`uninstall-cert` 只从信任库移除，CA 文件仍保留（需要时手动删除 `cacert/`）。Windows 需要管理员权限，Linux 需要 root；macOS 非 root 时自动回退到当前用户的登录钥匙串（无需 sudo，Web UI 的“安装 CA / 卸载 CA”按钮可直接使用）；系统级安装可用 sudo。卸载会同时清理系统与用户钥匙串，系统级证书仍需 sudo。Windows 下路径分隔符显示为 `\`。
 
