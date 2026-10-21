@@ -295,6 +295,7 @@ func runTrayCommand(args []string, stdout, _ io.Writer) error {
 	fs := flag.NewFlagSet("tray", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	path := fs.String("path", "", "配置文件路径")
+	keepConsole := fs.Bool("console", false, "保留控制台窗口（调试用）")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("参数错误: %w", err)
 	}
@@ -343,6 +344,10 @@ func runTrayCommand(args []string, stdout, _ io.Writer) error {
 			Admin:            admin,
 			Autostart:        autostart,
 			Actions:          tray.Actions{Quit: cancel},
+		}
+		// 托盘接管后不再需要控制台窗口；--console 可保留用于排查。
+		if !*keepConsole {
+			detachConsole()
 		}
 		return tray.Run(ctx, opts)
 	})
