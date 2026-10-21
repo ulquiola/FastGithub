@@ -30,7 +30,12 @@ func install(certPath, goos string, run commandRunner, copyFile fileCopier) erro
 	switch goos {
 	case "windows":
 		if err := run("certutil", "-addstore", "-f", "Root", certPath); err != nil {
-			return fmt.Errorf("certutil 导入失败（可能需要管理员权限）: %w", err)
+			// certutil 在无管理员权限时的输出是 GBK，直接抛给用户会变成乱码，
+			// 这里识别访问被拒并给出可执行的中文提示。
+			if isAccessDeniedOutput(err) {
+				return fmt.Errorf("需要管理员权限：请以管理员身份重新运行 install-cert")
+			}
+			return fmt.Errorf("certutil 导入失败: %w", err)
 		}
 	case "darwin":
 		systemArgs := []string{"add-trusted-cert", "-d", "-r", "trustRoot",
@@ -175,6 +180,13 @@ func uninstall(certPath, goos string, run commandRunner, remove fileRemover) err
 		return fmt.Errorf("不支持的平台 %s，请手动移除证书 %s", goos, certPath)
 	}
 	return nil
+}
+
+// isAccessDeniedOutput 识别 certutil 的访问被拒错误（0x80070005 / Access is denied），
+// 其输出为 GBK 且对用户无意义，调用方应改为给出中文提示。
+func isAccessDeniedOutput(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "0x80070005") || strings.Contains(msg, "access is denied")
 }
 
 func isAuthError(err error) bool {

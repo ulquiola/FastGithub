@@ -319,3 +319,15 @@ func TestStatus(t *testing.T) {
 		t.Fatal("不支持的平台应报错")
 	}
 }
+
+func TestInstallWindowsAccessDenied(t *testing.T) {
+	err := install("ca.crt", "windows", func(string, ...string) error {
+		return errors.New("exit status 0x80070005: CertUtil: -addstore 失败")
+	}, func(string, string) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "管理员") {
+		t.Fatalf("err = %v，期望提示需要管理员权限", err)
+	}
+	if strings.Contains(err.Error(), "0x80070005") {
+		t.Fatalf("不应把原始 certutil 输出暴露给用户: %v", err)
+	}
+}

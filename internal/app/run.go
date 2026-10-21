@@ -14,6 +14,7 @@ import (
 	"fastgithub-go/internal/config"
 	"fastgithub-go/internal/dialer"
 	"fastgithub-go/internal/flow"
+	"fastgithub-go/internal/intercept"
 	"fastgithub-go/internal/mitm"
 	"fastgithub-go/internal/resolver"
 	"fastgithub-go/internal/sysproxy"
@@ -99,7 +100,11 @@ func serve(ctx context.Context, cfg *config.Config, store *config.Store, proxyLn
 
 	cleanupTransparent, err := startTransparent(ctx, server, store, cfg)
 	if err != nil {
-		log.Printf("透明拦截未启用: %v", err)
+		if intercept.IsPermissionError(err) {
+			log.Printf("透明拦截未启用：需要管理员权限，已降级为显式代理 http://127.0.0.1:%d", cfg.Server.ProxyPort)
+		} else {
+			log.Printf("透明拦截未启用: %v", err)
+		}
 	}
 	defer cleanupTransparent()
 

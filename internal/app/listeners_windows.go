@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net"
 	"strconv"
@@ -100,9 +101,11 @@ func acceptLoop(ctx context.Context, ln net.Listener, handle func(context.Contex
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			if ctx.Err() == nil {
-				log.Printf("透明监听 %s 退出: %v", ln.Addr(), err)
+			// 拦截启动失败或进程退出时会关闭监听，这属于正常收尾，不应记成错误。
+			if errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
+				return
 			}
+			log.Printf("透明监听 %s 退出: %v", ln.Addr(), err)
 			return
 		}
 		go handle(ctx, conn)
