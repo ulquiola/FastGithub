@@ -4,6 +4,8 @@
 proxy_port = 38457
 ui_port    = 38470
 singleton  = true
+# 被接管域名是否使用 HTTP/2（浏览器 ↔ 代理 ↔ 上游）；false 时回退到 v0.3.6 的 h1.1 行为。
+http2      = true
 
 [server.transparent]
 https = 443

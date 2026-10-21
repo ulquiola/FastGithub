@@ -68,9 +68,15 @@ func serve(ctx context.Context, cfg *config.Config, store *config.Store, proxyLn
 
 	res := resolver.New(cfg.DNS)
 	d := dialer.New(store, res, nil)
-	reverse := mitm.NewReverseProxy(store, dialer.NewTransport(store, d))
+	transport := dialer.NewTransport(store, d, dialer.WithHTTP2(cfg.Server.HTTP2))
+	reverse := mitm.NewReverseProxy(store, transport)
+	if cfg.Server.HTTP2 {
+		// Upgrade/WebSocket 不能在 h2 上透传，固定走 h1 出口。
+		reverse.SetUpgradeTransport(dialer.NewTransport(store, d))
+	}
 	reverse.SetLogger(logger)
 	server := mitm.NewServer(store, d, ca, reverse, 5*time.Minute)
+	server.SetHTTP2(cfg.Server.HTTP2)
 	server.SetLogger(logger)
 
 	token, err := ui.LoadOrCreateToken(filepath.Join(filepath.Dir(caDir), "ui.token"))

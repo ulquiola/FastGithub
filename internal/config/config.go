@@ -24,6 +24,7 @@ type Server struct {
 	ProxyPort   int         `toml:"proxy_port"`
 	UIPort      int         `toml:"ui_port"`
 	Singleton   bool        `toml:"singleton"`
+	HTTP2       bool        `toml:"http2"`
 	Transparent Transparent `toml:"transparent"`
 }
 
@@ -83,6 +84,7 @@ func Default() *Config {
 			ProxyPort: 38457,
 			UIPort:    38470,
 			Singleton: true,
+			HTTP2:     true,
 			Transparent: Transparent{
 				HTTPS: 443,
 				HTTP:  80,

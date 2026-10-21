@@ -28,6 +28,26 @@ func TestDefault(t *testing.T) {
 	}
 }
 
+func TestDefaultHTTP2Enabled(t *testing.T) {
+	if !Default().Server.HTTP2 {
+		t.Fatal("默认应开启 HTTP/2")
+	}
+}
+
+func TestDecodeHTTP2Override(t *testing.T) {
+	c := Default()
+	root, err := Parse([]byte("[server]\nhttp2 = false\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Decode(root, c); err != nil {
+		t.Fatal(err)
+	}
+	if c.Server.HTTP2 {
+		t.Fatal("http2 = false 应覆盖默认值")
+	}
+}
+
 func TestDecodeIntoConfig(t *testing.T) {
 	c := Default()
 	root, err := Parse([]byte(`
