@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"fastgithub-go/internal/certs"
+	"fastgithub-go/internal/config"
+	"fastgithub-go/internal/instance"
 	"fastgithub-go/internal/tray"
 )
 
@@ -21,6 +23,39 @@ func TestRunVersion(t *testing.T) {
 	}
 	if !strings.HasPrefix(stdout.String(), "fastgithub ") {
 		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestAcquireSingleton(t *testing.T) {
+	old := acquireProxyInstance
+	t.Cleanup(func() { acquireProxyInstance = old })
+
+	calls := 0
+	acquireProxyInstance = func(string) (*instance.Lock, error) {
+		calls++
+		return &instance.Lock{}, nil
+	}
+
+	cfg := config.Default()
+	release, err := acquireSingleton(cfg, t.TempDir())
+	if err != nil || release == nil || calls != 1 {
+		t.Fatalf("err=%v releaseNil=%v calls=%d", err, release == nil, calls)
+	}
+	release()
+
+	cfg.Server.Singleton = false
+	release, err = acquireSingleton(cfg, t.TempDir())
+	if err != nil || release == nil || calls != 1 {
+		t.Fatalf("singleton=false 不应获取锁: err=%v calls=%d", err, calls)
+	}
+	release()
+
+	acquireProxyInstance = func(string) (*instance.Lock, error) {
+		return nil, instance.ErrAlreadyRunning
+	}
+	if _, err := acquireSingleton(config.Default(), t.TempDir()); err == nil ||
+		!strings.Contains(err.Error(), "已有 FastGithub 实例") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

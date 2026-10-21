@@ -17,6 +17,7 @@ import (
 	"fastgithub-go/internal/app"
 	"fastgithub-go/internal/certs"
 	"fastgithub-go/internal/config"
+	"fastgithub-go/internal/instance"
 	"fastgithub-go/internal/intercept"
 	"fastgithub-go/internal/tray"
 )
@@ -249,9 +250,32 @@ func runRunWithContext(ctx context.Context, args []string, stdout io.Writer) err
 	if err != nil {
 		return err
 	}
+	release, err := acquireSingleton(cfg, ".")
+	if err != nil {
+		return err
+	}
+	defer release()
 	return app.Run(ctx, cfg, store, func(proxy, ui net.Addr) {
 		fmt.Fprintf(stdout, "代理已启动: %s\nUI: http://%s/\n", proxy, ui)
 	})
+}
+
+// acquireProxyInstance 可在测试中替换，避免测试进程占用真实的单实例锁。
+var acquireProxyInstance = instance.Acquire
+
+// acquireSingleton 按 server.singleton 获取进程级锁；关闭时返回空操作。
+func acquireSingleton(cfg *config.Config, dir string) (func(), error) {
+	if !cfg.Server.Singleton {
+		return func() {}, nil
+	}
+	lock, err := acquireProxyInstance(dir)
+	if err != nil {
+		if errors.Is(err, instance.ErrAlreadyRunning) {
+			return nil, fmt.Errorf("已有 FastGithub 实例在运行（server.singleton = true）")
+		}
+		return nil, err
+	}
+	return func() { _ = lock.Release() }, nil
 }
 
 // loadConfig 发现并加载配置与规则库，然后切到配置目录。
@@ -313,6 +337,13 @@ func runTrayCommand(args []string, stdout, _ io.Writer) error {
 		return err
 	}
 	defer release()
+
+	// 托盘互斥体只防止重复托盘；代理锁还要覆盖服务与手工 run 的冲突。
+	releaseProxy, err := acquireSingleton(cfg, ".")
+	if err != nil {
+		return err
+	}
+	defer releaseProxy()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
