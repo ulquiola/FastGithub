@@ -64,6 +64,8 @@ const (
 
 	errorAlreadyExists      = syscall.Errno(183)
 	errorClassAlreadyExists = syscall.Errno(1410)
+	// errnoCancelled 是用户在 UAC 弹窗选择“否”时 ShellExecuteW 留下的 ERROR_CANCELLED。
+	errnoCancelled = syscall.Errno(1223)
 )
 
 // point 对应 Win32 POINT（两个 32 位有符号整数）。
@@ -434,12 +436,43 @@ func openUI() {
 
 // installCertElevated 以管理员身份重新运行自身 install-cert；用户取消 UAC 视为无操作。
 func installCertElevated(hwnd syscall.Handle) error {
+	_ = runElevated(hwnd, "install-cert")
+	return nil
+}
+
+// runElevated 以管理员身份重新运行自身并传入 params；hwnd 只作为 UAC 提示的父窗口。
+func runElevated(hwnd syscall.Handle, params string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("定位可执行文件失败: %w", err)
 	}
-	_ = shellExecute(hwnd, "runas", exe, "install-cert", swHide)
-	return nil
+	return shellExecute(hwnd, "runas", exe, params, swHide)
+}
+
+// CopyToClipboard 把 text 写入系统剪贴板（CF_UNICODETEXT）。
+//
+// 控制台面板没有托盘窗口，传 hwnd=0 让系统按当前前台窗口归属剪贴板。
+func CopyToClipboard(text string) error {
+	return copyText(0, text)
+}
+
+// OpenURL 用系统默认浏览器打开 url。
+func OpenURL(url string) error {
+	if url == "" {
+		return errors.New("URL 为空")
+	}
+	return shellExecute(0, "open", url, "", swShowNormal)
+}
+
+// RunElevated 以管理员身份重新运行自身并传入 params（会触发 UAC）。
+//
+// 用户取消 UAC 属于主动放弃，返回 nil 而不是错误。
+func RunElevated(params string) error {
+	err := runElevated(0, params)
+	if errors.Is(err, errnoCancelled) {
+		return nil
+	}
+	return err
 }
 
 func shellExecute(hwnd syscall.Handle, op, file, params string, show int32) error {

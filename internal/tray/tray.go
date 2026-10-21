@@ -1,7 +1,8 @@
 // Package tray 提供 Windows 通知区域图标（托盘）以及跨平台的状态与菜单定义。
 //
 // Windows 之外的平台没有通知区域实现，Run/AutostartEnabled/SetAutostart 返回
-// ErrUnsupported，CLI 会据此回退为控制台模式。
+// ErrUnsupported，CLI 会据此启动控制台状态面板；CopyToClipboard/OpenURL/RunElevated
+// 是托盘菜单与控制台面板共用的动作，非 Windows 平台为尽力而为的 stub。
 package tray
 
 import (

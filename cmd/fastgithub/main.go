@@ -16,16 +16,18 @@ import (
 	"fastgithub-go/internal/app"
 	"fastgithub-go/internal/certs"
 	"fastgithub-go/internal/config"
+	"fastgithub-go/internal/dashboard"
 	"fastgithub-go/internal/intercept"
 	"fastgithub-go/internal/tray"
 )
 
 const usage = `用法: fastgithub [命令]
 
-不带命令时启动通知区域图标（托盘），等价于 fastgithub tray。
+不带命令时先尝试通知区域图标（托盘）；托盘不可用时自动启动控制台状态面板。
 
 命令:
-  tray [--path 文件]                   启动通知区域图标（双击即用）
+  dashboard [--no-open] [--path 文件]  启动控制台状态面板（无托盘环境自动使用）
+  tray [--path 文件]                   启动通知区域图标（失败即报错，不降级）
   config validate [--path 文件]        校验配置
   install-cert [--dir 部署目录]        生成 CA 并加入信任库（CA 存于其下 cacert/；需管理员/root；macOS 非 root 时为用户级）
   uninstall-cert [--dir 部署目录]      从信任库移除 CA（需管理员/root）
@@ -36,6 +38,9 @@ const usage = `用法: fastgithub [命令]
   run [--path 文件]                    启动 38457 显式代理与 UI
   windivert-selftest                   打印 WinDivert 地址/DNS 自检
   version                              打印版本信息
+
+选项:
+  --no-open                            面板启动时不自动打开浏览器界面
 `
 
 // installCert / uninstallCert 可在测试中替换，避免真正修改系统信任库。
@@ -52,7 +57,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return runTrayReport(nil, stdout, stderr)
+		return runNoArgs(false, stdout, stderr)
 	}
 	switch args[0] {
 	case "-h", "--help", "help":
@@ -61,6 +66,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprint(stdout, usage)
 		return 0
+	case "--no-open":
+		// 无参数时也能直接抑制自动打开浏览器：fastgithub --no-open。
+		if len(args) != 1 {
+			return usageError(stderr)
+		}
+		return runNoArgs(true, stdout, stderr)
 	case "version":
 		if len(args) != 1 {
 			return usageError(stderr)
@@ -69,6 +80,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "tray":
 		return runTrayReport(args[1:], stdout, stderr)
+	case "dashboard":
+		return runDashboardReport(args[1:], stdout, stderr)
 	case "config":
 		if err := runConfig(args[1:], stdout); err != nil {
 			fmt.Fprintln(stderr, "错误: "+err.Error())
@@ -122,8 +135,44 @@ func usageError(stderr io.Writer) int {
 // startTray 可在测试中替换，避免测试进程创建真实的通知区域图标。
 var startTray = runTrayCommand
 
+// startDashboard 可在测试中替换，避免测试进程真正监听端口并阻塞。
+var startDashboard = runDashboardCommand
+
+// runNoArgs 实现无参数启动：先试托盘；托盘不可用（任何启动错误）时启动控制台面板。
+//
+// tray.ErrAlreadyRunning 不算“托盘不可用”：已有托盘实例在运行，再起面板只会
+// 因端口被占而失败，所以这里友好提示后退出。
+func runNoArgs(noOpen bool, stdout, stderr io.Writer) int {
+	err := startTray(nil, stdout, stderr)
+	if err == nil {
+		return 0
+	}
+	if errors.Is(err, tray.ErrAlreadyRunning) {
+		fmt.Fprintln(stdout, "已有一个 FastGithub 托盘实例在运行，本进程退出。")
+		return 0
+	}
+	fmt.Fprintf(stderr, "托盘不可用: %v\n正在启动控制台状态面板。\n", err)
+	var dashArgs []string
+	if noOpen {
+		dashArgs = []string{"--no-open"}
+	}
+	if dashErr := startDashboard(dashArgs, stdout, stderr); dashErr != nil {
+		fmt.Fprintln(stderr, "错误: "+dashErr.Error())
+		return 1
+	}
+	return 0
+}
+
 func runTrayReport(args []string, stdout, stderr io.Writer) int {
 	if err := startTray(args, stdout, stderr); err != nil {
+		fmt.Fprintln(stderr, "错误: "+err.Error())
+		return 1
+	}
+	return 0
+}
+
+func runDashboardReport(args []string, stdout, stderr io.Writer) int {
+	if err := startDashboard(args, stdout, stderr); err != nil {
 		fmt.Fprintln(stderr, "错误: "+err.Error())
 		return 1
 	}
@@ -267,8 +316,11 @@ func loadConfig(path string) (*config.Config, *config.Store, error) {
 	return cfg, store, nil
 }
 
-// runTrayCommand 加载配置后以托盘模式常驻；托盘不可用时回退为控制台 run。
-func runTrayCommand(args []string, stdout, stderr io.Writer) error {
+// addresses 是代理与 UI 的实际监听地址。
+type addresses struct{ proxy, ui net.Addr }
+
+// runTrayCommand 加载配置后以托盘模式常驻；托盘起不来就报错（不降级）。
+func runTrayCommand(args []string, stdout, _ io.Writer) error {
 	fs := flag.NewFlagSet("tray", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	path := fs.String("path", "", "配置文件路径")
@@ -287,13 +339,78 @@ func runTrayCommand(args []string, stdout, stderr io.Writer) error {
 	defer stop()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	return serveWithTray(ctx, cancel, cfg, store, stdout, stderr)
+	return serveWithUI(ctx, cancel, cfg, store, func(addr addresses) error {
+		admin := tray.IsAdmin()
+		autostart, _ := tray.AutostartEnabled()
+		fmt.Fprintf(stdout, "代理已启动: %s\nUI: http://%s/\n", addr.proxy, addr.ui)
+		opts := tray.Options{
+			Version:   app.Version(),
+			ProxyAddr: addr.proxy.String(),
+			UIAddr:    addr.ui.String(),
+			// 透明拦截是否真正可用取决于 WinDivert，这里只能按权限与配置推断。
+			InterceptEnabled: admin && cfg.Intercept.Mode != "off",
+			Admin:            admin,
+			Autostart:        autostart,
+			Actions:          tray.Actions{Quit: cancel},
+		}
+		return tray.Run(ctx, opts)
+	})
 }
 
-// serveWithTray 在后台跑 app.Run，主 goroutine 跑托盘消息循环；
-// 托盘退出或 ctx 取消后关闭代理并等待 app.Run 返回。
-func serveWithTray(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, store *config.Store, stdout, stderr io.Writer) error {
-	type addresses struct{ proxy, ui net.Addr }
+// runDashboardCommand 加载配置后运行控制台状态面板（强制面板，不尝试托盘）。
+func runDashboardCommand(args []string, stdout, _ io.Writer) error {
+	fs := flag.NewFlagSet("dashboard", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	path := fs.String("path", "", "配置文件路径")
+	noOpen := fs.Bool("no-open", false, "启动时不自动打开浏览器界面")
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("参数错误: %w", err)
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("用法: fastgithub dashboard [--no-open] [--path 文件]")
+	}
+	cfg, store, err := loadConfig(*path)
+	if err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	return serveWithUI(ctx, cancel, cfg, store, func(addr addresses) error {
+		return dashboard.Run(ctx, dashboardOptions(addr, cfg, *noOpen, stdout))
+	})
+}
+
+// dashboardOptions 把监听地址与配置折算成面板快照。
+func dashboardOptions(addr addresses, cfg *config.Config, noOpen bool, stdout io.Writer) dashboard.Options {
+	return dashboard.Options{
+		Version:   app.Version(),
+		ProxyAddr: addr.proxy.String(),
+		UIAddr:    addr.ui.String(),
+		Intercept: interceptState(cfg),
+		AutoOpen:  !noOpen,
+		Out:       stdout,
+	}
+}
+
+// interceptState 按配置与权限给出面板上的透明拦截状态。
+//
+// 与托盘提示一致：没有管理员权限时 WinDivert 无法启动，只能显示“未启用”。
+func interceptState(cfg *config.Config) string {
+	if cfg.Intercept.Mode == "off" {
+		return "已关闭"
+	}
+	if tray.IsAdmin() {
+		return "已启用"
+	}
+	return "未启用（需要管理员）"
+}
+
+// serveWithUI 在后台跑 app.Run，把实际监听地址交给 runUI（托盘/面板）；
+// runUI 返回或 ctx 取消后关闭代理并等待 app.Run 返回。
+func serveWithUI(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, store *config.Store, runUI func(addresses) error) error {
 	readyCh := make(chan addresses, 1)
 	done := make(chan error, 1)
 	go func() {
@@ -301,7 +418,7 @@ func serveWithTray(ctx context.Context, cancel context.CancelFunc, cfg *config.C
 			readyCh <- addresses{proxy: proxy, ui: ui}
 		})
 		done <- err
-		// 代理意外结束时让托盘消息循环也退出，避免留下无代理的图标。
+		// 代理意外结束时让 UI 也退出，避免留下没有代理的图标/面板。
 		cancel()
 	}()
 
@@ -313,38 +430,13 @@ func serveWithTray(ctx context.Context, cancel context.CancelFunc, cfg *config.C
 	case <-ctx.Done():
 		return waitApp(done)
 	}
-	fmt.Fprintf(stdout, "代理已启动: %s\nUI: http://%s/\n", addr.proxy, addr.ui)
 
-	admin := tray.IsAdmin()
-	autostart, _ := tray.AutostartEnabled()
-	opts := tray.Options{
-		Version:   app.Version(),
-		ProxyAddr: addr.proxy.String(),
-		UIAddr:    addr.ui.String(),
-		// 透明拦截是否真正可用取决于 WinDivert，这里只能按权限与配置推断。
-		InterceptEnabled: admin && cfg.Intercept.Mode != "off",
-		Admin:            admin,
-		Autostart:        autostart,
-		Actions:          tray.Actions{Quit: cancel},
-	}
-	switch err := tray.Run(ctx, opts); {
-	case err == nil:
-	case errors.Is(err, tray.ErrAlreadyRunning):
-		fmt.Fprintln(stdout, "已有一个 FastGithub 托盘实例在运行，本进程退出。")
-		cancel()
-		return waitApp(done)
-	default:
-		// 无桌面会话等场景托盘不可用，退回控制台模式，保证代理继续工作。
-		fmt.Fprintf(stderr, "托盘启动失败: %v；已回退为控制台模式，按 Ctrl+C 退出。\n", err)
-		select {
-		case <-ctx.Done():
-		case err := <-done:
-			return err
-		}
-	}
-
+	uiErr := runUI(addr)
 	cancel()
-	return waitApp(done)
+	if appErr := waitApp(done); uiErr == nil {
+		uiErr = appErr
+	}
+	return uiErr
 }
 
 // waitApp 等待 app.Run 退出；托盘退出不应无限阻塞进程。
