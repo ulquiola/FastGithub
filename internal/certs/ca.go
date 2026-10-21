@@ -38,6 +38,20 @@ type Authority struct {
 	leafs map[string]*tls.Certificate
 }
 
+// CACertDir 把部署目录（配置所在目录）解析为 CA 目录。
+// 默认仍为 DefaultDir；若传入目录本身就叫 cacert，则直接使用，
+// 避免拼成 cacert/cacert。
+func CACertDir(deployDir string) string {
+	if deployDir == "" {
+		return DefaultDir
+	}
+	clean := filepath.Clean(deployDir)
+	if filepath.Base(clean) == DefaultDir {
+		return clean
+	}
+	return filepath.Join(clean, DefaultDir)
+}
+
 // LoadOrCreate 从 dir 加载 CA；证书与私钥都不存在时生成一套。
 func LoadOrCreate(dir string) (*Authority, error) {
 	dir = defaultDir(dir)

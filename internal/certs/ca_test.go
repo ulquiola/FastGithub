@@ -10,6 +10,20 @@ import (
 	"time"
 )
 
+func TestCACertDir(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", "cacert"},
+		{"cacert", "cacert"},
+		{"deploy", filepath.Join("deploy", "cacert")},
+		{filepath.Join("deploy", "cacert"), filepath.Join("deploy", "cacert")},
+	}
+	for _, c := range cases {
+		if got := CACertDir(c.in); got != c.want {
+			t.Fatalf("CACertDir(%q) = %q，期望 %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestLoadOrCreateGeneratesCA(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "cacert")
 	a, err := LoadOrCreate(dir)

@@ -194,3 +194,25 @@ func TestRunUninstallCertMissingCA(t *testing.T) {
 		t.Fatalf("exit = %d stderr = %q", code, stderr.String())
 	}
 }
+
+// --dir 传部署目录时，CA 必须落在其下 cacert/，与 run（chdir 到配置目录后使用
+// 默认 cacert）保持一致；否则会生成第二张 CA，浏览器信任的与实际签发的不一致。
+func TestInstallCertDirIsDeployDir(t *testing.T) {
+	deploy := t.TempDir()
+	var installed string
+	old := installCert
+	installCert = func(path string) error {
+		installed = path
+		return nil
+	}
+	defer func() { installCert = old }()
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"install-cert", "--dir", deploy}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	want := filepath.Join(deploy, "cacert", "fastgithub.crt")
+	if installed != want {
+		t.Fatalf("installed = %q，期望 %q", installed, want)
+	}
+}

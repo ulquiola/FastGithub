@@ -21,8 +21,8 @@ const usage = `用法: fastgithub <命令>
 
 命令:
   config validate [--path 文件]        校验配置
-  install-cert [--dir 目录]            生成 CA 并加入信任库（需管理员/root；macOS 非 root 时为用户级）
-  uninstall-cert [--dir 目录]          从信任库移除 CA（需管理员/root）
+  install-cert [--dir 部署目录]        生成 CA 并加入信任库（CA 存于其下 cacert/；需管理员/root；macOS 非 root 时为用户级）
+  uninstall-cert [--dir 部署目录]      从信任库移除 CA（需管理员/root）
   install                              安装系统服务（需管理员/root）
   uninstall                            卸载系统服务
   start                                启动系统服务
@@ -136,14 +136,14 @@ func runConfig(args []string, stdout io.Writer) error {
 func runInstallCert(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("install-cert", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	dir := fs.String("dir", certs.DefaultDir, "CA 证书目录")
+	dir := fs.String("dir", certs.DefaultDir, "部署目录（CA 位于其下 cacert/）")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("参数错误: %w", err)
 	}
 	if fs.NArg() != 0 {
-		return fmt.Errorf("用法: fastgithub install-cert [--dir 目录]")
+		return fmt.Errorf("用法: fastgithub install-cert [--dir 部署目录]")
 	}
-	a, err := certs.LoadOrCreate(*dir)
+	a, err := certs.LoadOrCreate(certs.CACertDir(*dir))
 	if err != nil {
 		return err
 	}
@@ -158,14 +158,14 @@ func runInstallCert(args []string, stdout io.Writer) error {
 func runUninstallCert(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("uninstall-cert", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	dir := fs.String("dir", certs.DefaultDir, "CA 证书目录")
+	dir := fs.String("dir", certs.DefaultDir, "部署目录（CA 位于其下 cacert/）")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("参数错误: %w", err)
 	}
 	if fs.NArg() != 0 {
-		return fmt.Errorf("用法: fastgithub uninstall-cert [--dir 目录]")
+		return fmt.Errorf("用法: fastgithub uninstall-cert [--dir 部署目录]")
 	}
-	certPath, err := certs.CertPath(*dir)
+	certPath, err := certs.CertPath(certs.CACertDir(*dir))
 	if err != nil {
 		return err
 	}
