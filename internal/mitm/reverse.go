@@ -16,6 +16,7 @@ import (
 type ReverseProxy struct {
 	store     *config.Store
 	transport http.RoundTripper
+	upgrade   http.RoundTripper
 	logger    Logger
 }
 
@@ -25,6 +26,9 @@ func NewReverseProxy(store *config.Store, transport http.RoundTripper) *ReverseP
 
 // SetLogger 设置请求日志接收器。
 func (p *ReverseProxy) SetLogger(l Logger) { p.logger = l }
+
+// SetUpgradeTransport 设置承载协议升级（WebSocket）的 h1 专用 transport。
+func (p *ReverseProxy) SetUpgradeTransport(t http.RoundTripper) { p.upgrade = t }
 
 func (p *ReverseProxy) log(host, method string, status int, start time.Time, read, write int64) {
 	if p.logger == nil {
@@ -90,7 +94,13 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	out.URL = &u
 	out.RequestURI = ""
 	out.Host = r.Host
-	removeHopByHop(out.Header)
+	// Upgrade 请求必须保留 Connection/Upgrade，否则上游不会切换协议。
+	upgrade := out.Header.Get("Upgrade") != ""
+	if upgrade {
+		removeHopByHopKeepUpgrade(out.Header)
+	} else {
+		removeHopByHop(out.Header)
+	}
 	// 无 body 的请求保持 http.NoBody，否则 Transport 会改成 chunked。
 	var requestBody *countingReader
 	if out.Body != nil && out.Body != http.NoBody {
@@ -104,10 +114,20 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return requestBody.n.Load()
 	}
 
-	resp, err := p.transport.RoundTrip(out)
+	transport := p.transport
+	if upgrade && p.upgrade != nil {
+		// h2 不支持 101，升级请求固定走 h1 出口。
+		transport = p.upgrade
+	}
+	resp, err := transport.RoundTrip(out)
 	if err != nil {
 		http.Error(w, "上游请求失败: "+err.Error(), http.StatusBadGateway)
 		p.log(host, r.Method, http.StatusBadGateway, start, readBytes(), 0)
+		return
+	}
+	if resp.StatusCode == http.StatusSwitchingProtocols {
+		p.serveUpgrade(w, resp)
+		p.log(host, r.Method, resp.StatusCode, start, readBytes(), 0)
 		return
 	}
 	defer resp.Body.Close()
@@ -121,6 +141,39 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	responseBody := &countingWriter{ResponseWriter: w}
 	io.Copy(responseBody, resp.Body)
 	p.log(host, r.Method, resp.StatusCode, start, readBytes(), responseBody.n.Load())
+}
+
+// serveUpgrade 把 101 响应写回客户端，并在客户端与上游之间双向透传字节。
+func (p *ReverseProxy) serveUpgrade(w http.ResponseWriter, resp *http.Response) {
+	back, ok := resp.Body.(io.ReadWriteCloser)
+	if !ok {
+		http.Error(w, "上游未返回可升级连接", http.StatusBadGateway)
+		return
+	}
+	defer back.Close()
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "当前服务器不支持连接劫持", http.StatusInternalServerError)
+		return
+	}
+	client, brw, err := hj.Hijack()
+	if err != nil {
+		return
+	}
+	defer client.Close()
+	// 测试或代理构造的响应可能没有填 Proto，补齐以免写出 HTTP/0.0。
+	if resp.ProtoMajor == 0 {
+		resp.ProtoMajor, resp.ProtoMinor = 1, 1
+	}
+	resp.Header.Del("Transfer-Encoding")
+	resp.Header.Del("Content-Length")
+	if err := resp.Write(client); err != nil {
+		return
+	}
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(back, brw); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(client, back); done <- struct{}{} }()
+	<-done
 }
 
 func writeShortCircuit(w http.ResponseWriter, resp *config.Response) {
@@ -169,4 +222,24 @@ func removeHopByHop(h http.Header) {
 	for _, name := range hopByHopHeaders {
 		h.Del(name)
 	}
+}
+
+// removeHopByHopKeepUpgrade 与 removeHopByHop 相同，但保留协议升级所需的头。
+func removeHopByHopKeepUpgrade(h http.Header) {
+	for _, value := range h.Values("Connection") {
+		for _, name := range strings.Split(value, ",") {
+			name = strings.TrimSpace(name)
+			if strings.EqualFold(name, "upgrade") {
+				continue
+			}
+			h.Del(name)
+		}
+	}
+	for _, name := range hopByHopHeaders {
+		if strings.EqualFold(name, "Upgrade") {
+			continue
+		}
+		h.Del(name)
+	}
+	h.Set("Connection", "Upgrade")
 }
