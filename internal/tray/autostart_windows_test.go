@@ -115,3 +115,9 @@ func readAutostartValue(t *testing.T) string {
 	}
 	return syscall.UTF16ToString(buf)
 }
+
+func TestSetAutostartRejectsRelativePath(t *testing.T) {
+	if err := SetAutostart(true, "fastgithub.toml"); err == nil {
+		t.Fatal("相对路径应被拒绝，否则 Run 键启动时找不到配置")
+	}
+}

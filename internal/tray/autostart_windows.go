@@ -5,6 +5,7 @@ package tray
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"syscall"
 	"unsafe"
 )
@@ -77,6 +78,10 @@ func SetAutostart(enabled bool, configPath string) error {
 	}
 	if configPath == "" {
 		return fmt.Errorf("缺少主配置文件路径，无法写入开机启动项")
+	}
+	// Run 键启动时没有工作目录，必须写入绝对路径，否则会退回“找不到配置”的旧问题。
+	if !filepath.IsAbs(configPath) {
+		return fmt.Errorf("主配置文件路径必须是绝对路径: %s", configPath)
 	}
 	exe, err := os.Executable()
 	if err != nil {
