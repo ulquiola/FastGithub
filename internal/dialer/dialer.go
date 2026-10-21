@@ -60,7 +60,17 @@ func (d *Dialer) DialTCP(ctx context.Context, t Target) (net.Conn, error) {
 }
 
 // DialTLS 建立 TLS 连接；SNI 与证书判定遵循域名规则。
+// 不发送 ALPN，保持 v0.3.6 的 HTTP/1.1 行为。
 func (d *Dialer) DialTLS(ctx context.Context, t Target) (*tls.Conn, error) {
+	return d.dialTLS(ctx, t, nil)
+}
+
+// DialTLSH2 与 DialTLS 相同，但通告 h2，供启用 HTTP/2 的 transport 使用。
+func (d *Dialer) DialTLSH2(ctx context.Context, t Target) (*tls.Conn, error) {
+	return d.dialTLS(ctx, t, []string{"h2", "http/1.1"})
+}
+
+func (d *Dialer) dialTLS(ctx context.Context, t Target, protos []string) (*tls.Conn, error) {
 	conn, ip, err := d.dialFirst(ctx, t)
 	if err != nil {
 		return nil, err
@@ -74,6 +84,7 @@ func (d *Dialer) DialTLS(ctx context.Context, t Target) (*tls.Conn, error) {
 	}
 	tlsConn := tls.Client(conn, &tls.Config{
 		ServerName:         sni,
+		NextProtos:         protos,
 		InsecureSkipVerify: true,
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			return verifyParsed(cs.PeerCertificates, t.Host, ignoreName, d.roots)
