@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -23,11 +24,10 @@ import (
 
 const usage = `用法: fastgithub [命令]
 
-不带命令时先尝试通知区域图标（托盘）；托盘不可用时自动启动控制台状态面板。
+不带命令时启动通知区域图标（托盘）。注册托盘需要管理员权限，会自动请求提权。
 
 命令:
-  dashboard [--no-open] [--path 文件]  启动控制台状态面板（无托盘环境自动使用）
-  tray [--path 文件]                   启动通知区域图标（失败即报错，不降级）
+  tray [--path 文件]                   启动通知区域图标（需管理员）
   config validate [--path 文件]        校验配置
   install-cert [--dir 部署目录]        生成 CA 并加入信任库（CA 存于其下 cacert/；需管理员/root；macOS 非 root 时为用户级）
   uninstall-cert [--dir 部署目录]      从信任库移除 CA（需管理员/root）
@@ -38,9 +38,6 @@ const usage = `用法: fastgithub [命令]
   run [--path 文件]                    启动 38457 显式代理与 UI
   windivert-selftest                   打印 WinDivert 地址/DNS 自检
   version                              打印版本信息
-
-选项:
-  --no-open                            面板启动时不自动打开浏览器界面
 `
 
 // installCert / uninstallCert 可在测试中替换，避免真正修改系统信任库。
@@ -57,7 +54,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return runNoArgs(false, stdout, stderr)
+		return runTrayReport(nil, stdout, stderr)
 	}
 	switch args[0] {
 	case "-h", "--help", "help":
@@ -66,12 +63,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprint(stdout, usage)
 		return 0
-	case "--no-open":
-		// 无参数时也能直接抑制自动打开浏览器：fastgithub --no-open。
-		if len(args) != 1 {
-			return usageError(stderr)
-		}
-		return runNoArgs(true, stdout, stderr)
 	case "version":
 		if len(args) != 1 {
 			return usageError(stderr)
@@ -80,8 +71,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "tray":
 		return runTrayReport(args[1:], stdout, stderr)
-	case "dashboard":
-		return runDashboardReport(args[1:], stdout, stderr)
 	case "config":
 		if err := runConfig(args[1:], stdout); err != nil {
 			fmt.Fprintln(stderr, "错误: "+err.Error())
@@ -141,33 +130,12 @@ var acquireTrayInstance = tray.AcquireSingleInstance
 // startDashboard 可在测试中替换，避免测试进程真正监听端口并阻塞。
 var startDashboard = runDashboardCommand
 
-// runNoArgs 实现无参数启动：先试托盘；托盘不可用（任何启动错误）时启动控制台面板。
-//
-// tray.ErrAlreadyRunning 不算“托盘不可用”：已有托盘实例在运行，再起面板只会
-// 因端口被占而失败，所以这里友好提示后退出。
-func runNoArgs(noOpen bool, stdout, stderr io.Writer) int {
-	err := startTray(nil, stdout, stderr)
-	if err == nil {
-		return 0
-	}
-	if errors.Is(err, tray.ErrAlreadyRunning) {
-		fmt.Fprintln(stdout, "已有一个 FastGithub 托盘实例在运行，本进程退出。")
-		return 0
-	}
-	fmt.Fprintf(stderr, "托盘不可用: %v\n正在启动控制台状态面板。\n", err)
-	var dashArgs []string
-	if noOpen {
-		dashArgs = []string{"--no-open"}
-	}
-	if dashErr := startDashboard(dashArgs, stdout, stderr); dashErr != nil {
-		fmt.Fprintln(stderr, "错误: "+dashErr.Error())
-		return 1
-	}
-	return 0
-}
-
 func runTrayReport(args []string, stdout, stderr io.Writer) int {
 	if err := startTray(args, stdout, stderr); err != nil {
+		if errors.Is(err, tray.ErrAlreadyRunning) {
+			fmt.Fprintln(stdout, "已有一个 FastGithub 托盘实例在运行，本进程退出。")
+			return 0
+		}
 		fmt.Fprintln(stderr, "错误: "+err.Error())
 		return 1
 	}
@@ -332,6 +300,14 @@ func runTrayCommand(args []string, stdout, _ io.Writer) error {
 	}
 	if fs.NArg() != 0 {
 		return fmt.Errorf("用法: fastgithub tray [--path 文件]")
+	}
+	// 注册通知区域图标需要与 Explorer 同级或更高权限；本程序本身也需要管理员
+	// （WinDivert、监听 443、写入信任库），所以托盘模式统一以管理员身份运行。
+	if runtime.GOOS == "windows" && !tray.IsAdmin() {
+		if err := tray.RelaunchElevated(append([]string{"tray"}, args...)); err != nil {
+			return err
+		}
+		return nil
 	}
 	cfg, store, configPath, err := loadConfig(*path)
 	if err != nil {
