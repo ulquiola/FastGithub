@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,69 @@ func TestRunVersion(t *testing.T) {
 	}
 }
 
+// stubTray 把托盘入口换成记录调用的假实现，避免测试进程创建真实通知区域图标。
+func stubTray(t *testing.T, err error) *[]string {
+	t.Helper()
+	var calls []string
+	old := startTray
+	startTray = func(args []string, stdout, stderr io.Writer) error {
+		calls = append(calls, strings.Join(args, " "))
+		return err
+	}
+	t.Cleanup(func() { startTray = old })
+	return &calls
+}
+
+func TestRunNoArgsStartsTray(t *testing.T) {
+	calls := stubTray(t, nil)
+	var stdout, stderr bytes.Buffer
+	if code := run(nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d，期望 0；stderr=%s", code, stderr.String())
+	}
+	if len(*calls) != 1 || (*calls)[0] != "" {
+		t.Fatalf("无参数应调用托盘一次，实际 %q", *calls)
+	}
+}
+
+func TestRunTraySubcommand(t *testing.T) {
+	calls := stubTray(t, nil)
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"tray", "--path", "fastgithub.toml"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d，期望 0；stderr=%s", code, stderr.String())
+	}
+	if len(*calls) != 1 || !strings.Contains((*calls)[0], "--path fastgithub.toml") {
+		t.Fatalf("tray 子命令参数未透传：%q", *calls)
+	}
+}
+
+func TestRunTrayFailure(t *testing.T) {
+	stubTray(t, errors.New("没有桌面会话"))
+	var stdout, stderr bytes.Buffer
+	if code := run(nil, &stdout, &stderr); code != 1 {
+		t.Fatalf("exit = %d，期望 1", code)
+	}
+	if !strings.Contains(stderr.String(), "没有桌面会话") {
+		t.Fatalf("stderr 应包含失败原因，实际 %q", stderr.String())
+	}
+}
+
+func TestRunHelp(t *testing.T) {
+	for _, arg := range []string{"-h", "--help", "help"} {
+		t.Run(arg, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{arg}, &stdout, &stderr); code != 0 {
+				t.Fatalf("exit = %d，期望 0", code)
+			}
+			if !strings.Contains(stdout.String(), "用法") || !strings.Contains(stdout.String(), "tray") {
+				t.Fatalf("帮助应打印用法并提到 tray，实际 %q", stdout.String())
+			}
+			if stderr.String() != "" {
+				t.Fatalf("帮助不应写 stderr，实际 %q", stderr.String())
+			}
+		})
+	}
+}
+
 func TestRunUnknownCommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"nope"}, &stdout, &stderr); code != 1 {
@@ -37,8 +101,9 @@ func TestRunUsageErrors(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"无参数", nil},
+		{"未知选项", []string{"-x"}},
 		{"version 多余参数", []string{"version", "extra"}},
+		{"help 多余参数", []string{"help", "extra"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -10,16 +11,21 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"fastgithub-go/internal/app"
 	"fastgithub-go/internal/certs"
 	"fastgithub-go/internal/config"
 	"fastgithub-go/internal/intercept"
+	"fastgithub-go/internal/tray"
 )
 
-const usage = `用法: fastgithub <命令>
+const usage = `用法: fastgithub [命令]
+
+不带命令时启动通知区域图标（托盘），等价于 fastgithub tray。
 
 命令:
+  tray [--path 文件]                   启动通知区域图标（双击即用）
   config validate [--path 文件]        校验配置
   install-cert [--dir 部署目录]        生成 CA 并加入信任库（CA 存于其下 cacert/；需管理员/root；macOS 非 root 时为用户级）
   uninstall-cert [--dir 部署目录]      从信任库移除 CA（需管理员/root）
@@ -46,15 +52,23 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usageError(stderr)
+		return runTrayReport(nil, stdout, stderr)
 	}
 	switch args[0] {
+	case "-h", "--help", "help":
+		if len(args) != 1 {
+			return usageError(stderr)
+		}
+		fmt.Fprint(stdout, usage)
+		return 0
 	case "version":
 		if len(args) != 1 {
 			return usageError(stderr)
 		}
 		fmt.Fprintln(stdout, app.BuildInfo())
 		return 0
+	case "tray":
+		return runTrayReport(args[1:], stdout, stderr)
 	case "config":
 		if err := runConfig(args[1:], stdout); err != nil {
 			fmt.Fprintln(stderr, "错误: "+err.Error())
@@ -103,6 +117,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 func usageError(stderr io.Writer) int {
 	fmt.Fprint(stderr, usage)
 	return 1
+}
+
+// startTray 可在测试中替换，避免测试进程创建真实的通知区域图标。
+var startTray = runTrayCommand
+
+func runTrayReport(args []string, stdout, stderr io.Writer) int {
+	if err := startTray(args, stdout, stderr); err != nil {
+		fmt.Fprintln(stderr, "错误: "+err.Error())
+		return 1
+	}
+	return 0
 }
 
 func runConfig(args []string, stdout io.Writer) error {
@@ -212,23 +237,122 @@ func runRunWithContext(ctx context.Context, args []string, stdout io.Writer) err
 	if fs.NArg() != 0 {
 		return fmt.Errorf("用法: fastgithub run [--path 文件]")
 	}
-	mainPath, confDir, err := config.Discover(*path)
+	cfg, store, err := loadConfig(*path)
 	if err != nil {
 		return err
-	}
-	cfg, err := config.Load(mainPath, confDir)
-	if err != nil {
-		return err
-	}
-	store, err := config.NewStore(cfg)
-	if err != nil {
-		return err
-	}
-	// 服务以绝对路径启动时，让 cacert/ui.token/logs 落在配置目录旁。
-	if err := os.Chdir(filepath.Dir(mainPath)); err != nil {
-		return fmt.Errorf("切换到配置目录失败: %w", err)
 	}
 	return app.Run(ctx, cfg, store, func(proxy, ui net.Addr) {
 		fmt.Fprintf(stdout, "代理已启动: %s\nUI: http://%s/\n", proxy, ui)
 	})
+}
+
+// loadConfig 发现并加载配置与规则库，然后切到配置目录。
+// 服务以绝对路径启动时，让 cacert/ui.token/logs 落在配置目录旁。
+func loadConfig(path string) (*config.Config, *config.Store, error) {
+	mainPath, confDir, err := config.Discover(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	cfg, err := config.Load(mainPath, confDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	store, err := config.NewStore(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := os.Chdir(filepath.Dir(mainPath)); err != nil {
+		return nil, nil, fmt.Errorf("切换到配置目录失败: %w", err)
+	}
+	return cfg, store, nil
+}
+
+// runTrayCommand 加载配置后以托盘模式常驻；托盘不可用时回退为控制台 run。
+func runTrayCommand(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("tray", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	path := fs.String("path", "", "配置文件路径")
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("参数错误: %w", err)
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("用法: fastgithub tray [--path 文件]")
+	}
+	cfg, store, err := loadConfig(*path)
+	if err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	return serveWithTray(ctx, cancel, cfg, store, stdout, stderr)
+}
+
+// serveWithTray 在后台跑 app.Run，主 goroutine 跑托盘消息循环；
+// 托盘退出或 ctx 取消后关闭代理并等待 app.Run 返回。
+func serveWithTray(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, store *config.Store, stdout, stderr io.Writer) error {
+	type addresses struct{ proxy, ui net.Addr }
+	readyCh := make(chan addresses, 1)
+	done := make(chan error, 1)
+	go func() {
+		err := app.Run(ctx, cfg, store, func(proxy, ui net.Addr) {
+			readyCh <- addresses{proxy: proxy, ui: ui}
+		})
+		done <- err
+		// 代理意外结束时让托盘消息循环也退出，避免留下无代理的图标。
+		cancel()
+	}()
+
+	var addr addresses
+	select {
+	case addr = <-readyCh:
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return waitApp(done)
+	}
+	fmt.Fprintf(stdout, "代理已启动: %s\nUI: http://%s/\n", addr.proxy, addr.ui)
+
+	admin := tray.IsAdmin()
+	autostart, _ := tray.AutostartEnabled()
+	opts := tray.Options{
+		Version:   app.Version(),
+		ProxyAddr: addr.proxy.String(),
+		UIAddr:    addr.ui.String(),
+		// 透明拦截是否真正可用取决于 WinDivert，这里只能按权限与配置推断。
+		InterceptEnabled: admin && cfg.Intercept.Mode != "off",
+		Admin:            admin,
+		Autostart:        autostart,
+		Actions:          tray.Actions{Quit: cancel},
+	}
+	switch err := tray.Run(ctx, opts); {
+	case err == nil:
+	case errors.Is(err, tray.ErrAlreadyRunning):
+		fmt.Fprintln(stdout, "已有一个 FastGithub 托盘实例在运行，本进程退出。")
+		cancel()
+		return waitApp(done)
+	default:
+		// 无桌面会话等场景托盘不可用，退回控制台模式，保证代理继续工作。
+		fmt.Fprintf(stderr, "托盘启动失败: %v；已回退为控制台模式，按 Ctrl+C 退出。\n", err)
+		select {
+		case <-ctx.Done():
+		case err := <-done:
+			return err
+		}
+	}
+
+	cancel()
+	return waitApp(done)
+}
+
+// waitApp 等待 app.Run 退出；托盘退出不应无限阻塞进程。
+func waitApp(done <-chan error) error {
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(5 * time.Second):
+		return errors.New("等待代理退出超时")
+	}
 }

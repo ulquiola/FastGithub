@@ -65,6 +65,10 @@ $ fastgithub uninstall            # 卸载服务
 
 WinDivert 不随包内嵌，需把 `WinDivert.dll` 与 `WinDivert64.sys` 放到 `intercept.driver_dir`、可执行文件同目录或 `windivert/` 下。DLL 缺失、非管理员或 `WinDivertOpen` 失败时只告警，38457 显式代理继续可用。WinDivert 2.2.2 仅提供 x86/x64 驱动，`windows/arm64` 包不含 `windivert/`；再分发时请保留其 `LICENSE`（LGPLv3/GPLv2）。UI 的“切换拦截”按钮当前返回 501，请通过 `intercept.mode` 配置启停。
 
+## Windows 托盘
+
+双击 `fastgithub.exe`（或执行 `fastgithub tray`）会在启动代理的同时把图标放进通知区域：左键单击/双击打开 Web UI，右键菜单提供打开界面、复制代理地址、以管理员身份安装证书（触发 UAC）、拦截状态、开机启动与退出。退出会先关闭代理再移除图标；没有桌面会话时自动回退为控制台 `run` 并打印原因，`fastgithub run` 行为不变。开机启动写入当前用户 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，不需要管理员权限。
+
 ## 目标平台
 
 Windows / Linux / macOS，`amd64` 与 `arm64`，`CGO_ENABLED=0` 交叉编译。
