@@ -101,7 +101,7 @@ async function loadSystemProxy() {
     if (!s.supported) {
       badge.textContent = '不可用';
       badge.className = 'badge muted';
-      detail.textContent = '当前平台请在系统中手动设置代理';
+      detail.textContent = s.note || '当前平台请在系统中手动设置代理';
       enable.disabled = true;
       disable.disabled = true;
       return;
@@ -113,7 +113,7 @@ async function loadSystemProxy() {
     } else {
       badge.textContent = '未启用';
       badge.className = 'badge muted';
-      detail.textContent = s.service ? `${s.service} 未指向 FastGithub` : '未检测到可用网络服务';
+      detail.textContent = s.note || (s.service ? `${s.service} 未指向 FastGithub` : '未检测到可用网络服务');
     }
     enable.disabled = s.enabled;
     disable.disabled = !s.enabled;

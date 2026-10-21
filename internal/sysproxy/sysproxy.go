@@ -21,6 +21,7 @@ type Status struct {
 	Service   string `json:"service,omitempty"`
 	Server    string `json:"server,omitempty"`
 	Port      int    `json:"port,omitempty"`
+	Note      string `json:"note,omitempty"`
 }
 
 type runner func(name string, args ...string) ([]byte, error)
@@ -57,6 +58,11 @@ func get(port int, goos string, run runner) (Status, error) {
 	}
 	service, err := primaryService(run)
 	if err != nil {
+		var tunnel *tunnelRouteError
+		if errors.As(err, &tunnel) {
+			// VPN 的 utun 接口没有对应的网络服务，无法用 networksetup 设置。
+			return Status{Supported: false, Note: tunnelHint(tunnel.device, port)}, nil
+		}
 		return Status{}, err
 	}
 	http, err := proxyConfig(run, "-getwebproxy", service)
@@ -85,7 +91,7 @@ func enable(port int, goos string, run runner) error {
 	}
 	service, err := primaryService(run)
 	if err != nil {
-		return err
+		return tunnelError(err, port)
 	}
 	addr := strconv.Itoa(port)
 	for _, args := range [][]string{
@@ -105,7 +111,7 @@ func disable(port int, goos string, run runner) error {
 	}
 	service, err := primaryService(run)
 	if err != nil {
-		return err
+		return tunnelError(err, port)
 	}
 	cfg, err := proxyConfig(run, "-getwebproxy", service)
 	if err != nil {
@@ -176,7 +182,26 @@ func primaryService(run runner) (string, error) {
 	if name := serviceForDevice(string(out), device); name != "" {
 		return name, nil
 	}
-	return "", fmt.Errorf("找不到接口 %s 对应的网络服务", device)
+	return "", &tunnelRouteError{device: device}
+}
+
+type tunnelRouteError struct{ device string }
+
+func (e *tunnelRouteError) Error() string {
+	return "默认路由为 VPN/隧道接口 " + e.device
+}
+
+// tunnelError 把隧道路由错误转成带操作指引的错误。
+func tunnelError(err error, port int) error {
+	var tunnel *tunnelRouteError
+	if errors.As(err, &tunnel) {
+		return errors.New(tunnelHint(tunnel.device, port))
+	}
+	return err
+}
+
+func tunnelHint(device string, port int) string {
+	return fmt.Sprintf("默认路由为 VPN/隧道接口 %s；请在 VPN 软件中把 HTTP/HTTPS 代理设为 127.0.0.1:%d", device, port)
 }
 
 func routeInterface(out string) string {

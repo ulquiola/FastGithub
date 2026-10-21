@@ -124,6 +124,26 @@ func TestDisableDarwin(t *testing.T) {
 	}
 }
 
+func TestTunnelRoute(t *testing.T) {
+	outputs := map[string]string{
+		"route -n get default":                  "  interface: utun10\n",
+		"networksetup -listnetworkserviceorder": serviceOrder,
+	}
+	status, err := get(38457, "darwin", fakeRun(outputs, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Supported || !strings.Contains(status.Note, "VPN") || !strings.Contains(status.Note, "38457") {
+		t.Fatalf("status = %+v", status)
+	}
+	if err := enable(38457, "darwin", fakeRun(outputs, nil)); err == nil || !strings.Contains(err.Error(), "VPN") {
+		t.Fatalf("enable err = %v", err)
+	}
+	if err := disable(38457, "darwin", fakeRun(outputs, nil)); err == nil || !strings.Contains(err.Error(), "127.0.0.1:38457") {
+		t.Fatalf("disable err = %v", err)
+	}
+}
+
 func TestUnsupportedPlatforms(t *testing.T) {
 	status, err := get(38457, "windows", nil)
 	if err != nil || status.Supported {
