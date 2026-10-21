@@ -5,17 +5,17 @@ package dashboard
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"io"
 	"os"
 	"syscall"
 	"unsafe"
 )
 
-// STD_INPUT_HANDLE / STD_OUTPUT_HANDLE 是 GetStdHandle 的 DWORD 参数；按有符号
-// 32 位传入，32/64 位下都能得到正确的 0xFFFFFFF6 / 0xFFFFFFF5。
+// STD_INPUT_HANDLE 是 GetStdHandle 的 DWORD 参数；按有符号 32 位传入，
+// 32/64 位下都能得到正确的 0xFFFFFFF6。
 const (
-	stdInputHandle  = -10
-	stdOutputHandle = -11
+	stdInputHandle = -10
 
 	// 控制台输入模式（STD_INPUT_HANDLE）。
 	consoleLineInput = 0x0002
@@ -23,39 +23,70 @@ const (
 	// 控制台输出模式（STD_OUTPUT_HANDLE）。
 	consoleVTProcessing = 0x0004
 
-	invalidHandle = ^uintptr(0)
+	keyEventType = 0x0001
 
-	waitObject0    = 0
-	waitPollMillis = 200
+	invalidHandle = ^uintptr(0)
 )
 
 var (
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
 
-	procGetStdHandle        = kernel32.NewProc("GetStdHandle")
-	procGetConsoleMode      = kernel32.NewProc("GetConsoleMode")
-	procSetConsoleMode      = kernel32.NewProc("SetConsoleMode")
-	procWaitForSingleObject = kernel32.NewProc("WaitForSingleObject")
+	procGetStdHandle      = kernel32.NewProc("GetStdHandle")
+	procGetConsoleMode    = kernel32.NewProc("GetConsoleMode")
+	procSetConsoleMode    = kernel32.NewProc("SetConsoleMode")
+	procReadConsoleInputW = kernel32.NewProc("ReadConsoleInputW")
 )
 
-// stdHandle 把 GetStdHandle 的负数常量转成句柄参数（有符号扩展）。
-func stdHandle(id int32) uintptr { return uintptr(id) }
+// inputRecord 对应 Win32 INPUT_RECORD（20 字节）。只读取 KEY_EVENT 的
+// bKeyDown 与 UnicodeChar；其余事件类型复用同一块 16 字节 union。
+type inputRecord struct {
+	EventType uint16
+	_         uint16
+	Event     [16]byte
+}
+
+// inputSession 是 Run 持有的输入源。控制台会话记录原始模式，restore 负责还原；
+// 管道/文件输入不修改任何模式。
+type inputSession struct {
+	handle  syscall.Handle
+	mode    uint32
+	console bool
+}
+
+// acquireInput 在启动读键 goroutine 之前捕获控制台句柄与原始模式，并关闭
+// 行缓冲与回显。失败时退化为按字节读取 stdin。
+func acquireInput() inputSession {
+	h, mode, ok := consoleInputHandle()
+	if !ok {
+		return inputSession{}
+	}
+	newMode := mode &^ uint32(consoleLineInput|consoleEchoInput)
+	if r, _, _ := procSetConsoleMode.Call(uintptr(h), uintptr(newMode)); r == 0 {
+		return inputSession{}
+	}
+	return inputSession{handle: h, mode: mode, console: true}
+}
+
+// restore 把控制台恢复成 acquireInput 捕获的原始模式。
+func (s inputSession) restore() {
+	if !s.console {
+		return
+	}
+	procSetConsoleMode.Call(uintptr(s.handle), uintptr(s.mode))
+}
 
 // readKeys 把按键写进 keys；ctx 取消或输入结束时返回并关闭通道。
-//
-// 有控制台时关闭行缓冲与回显实现“按下即响应”；stdin 被重定向（管道、文件、
-// 服务会话）时退化为按字节读取，这样 `echo q | fastgithub` 也能退出面板。
-func readKeys(ctx context.Context, keys chan<- byte) {
+func (s inputSession) readKeys(ctx context.Context, keys chan<- byte) {
 	defer close(keys)
-	if h, mode, ok := consoleInputHandle(); ok {
-		if restore, ok := enableSingleKey(h, mode); ok {
-			defer restore()
-			readConsoleKeys(ctx, h, keys)
-			return
-		}
+	if s.console {
+		readConsoleKeys(ctx, s.handle, keys)
+		return
 	}
 	readStreamKeys(ctx, os.Stdin, keys)
 }
+
+// stdHandle 把 GetStdHandle 的负数常量转成句柄参数（有符号扩展）。
+func stdHandle(id int32) uintptr { return uintptr(id) }
 
 // consoleInputHandle 返回控制台输入句柄与当前模式；stdin 不是控制台时 ok 为 false。
 func consoleInputHandle() (syscall.Handle, uint32, bool) {
@@ -63,46 +94,69 @@ func consoleInputHandle() (syscall.Handle, uint32, bool) {
 	if h == 0 || h == invalidHandle {
 		return 0, 0, false
 	}
-	var mode uint32
-	if r, _, _ := procGetConsoleMode.Call(h, uintptr(unsafe.Pointer(&mode))); r == 0 {
+	mode, ok := consoleMode(h)
+	if !ok {
 		return 0, 0, false
 	}
 	return syscall.Handle(h), mode, true
 }
 
-// enableSingleKey 关闭行缓冲与回显（保留 ENABLE_PROCESSED_INPUT，Ctrl+C 仍由
-// 系统产生中断事件交给 signal.NotifyContext）；返回恢复原模式的函数。
-func enableSingleKey(h syscall.Handle, mode uint32) (func(), bool) {
-	newMode := mode &^ uint32(consoleLineInput|consoleEchoInput)
-	if r, _, _ := procSetConsoleMode.Call(uintptr(h), uintptr(newMode)); r == 0 {
-		return nil, false
+// consoleMode 读取句柄的控制台模式；非控制台句柄返回 false。
+func consoleMode(h uintptr) (uint32, bool) {
+	var mode uint32
+	if r, _, _ := procGetConsoleMode.Call(h, uintptr(unsafe.Pointer(&mode))); r == 0 {
+		return 0, false
 	}
-	return func() { procSetConsoleMode.Call(uintptr(h), uintptr(mode)) }, true
+	return mode, true
 }
 
-// readConsoleKeys 用 WaitForSingleObject 轮询句柄，保证 ctx 取消后 200ms 内退出，
-// 避免阻塞在 ReadFile 上无法响应退出。
+// readConsoleKeys 用 ReadConsoleInputW 读取输入记录。它对每个记录（包括
+// key-up）都会返回，避免字符模式 ReadFile 在无字符时永久阻塞；每次读取后
+// 先检查 ctx，再投递过滤后的按键。
 func readConsoleKeys(ctx context.Context, h syscall.Handle, keys chan<- byte) {
-	var buf [16]byte
+	var record inputRecord
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		r, _, _ := procWaitForSingleObject.Call(uintptr(h), waitPollMillis)
+		var n uint32
+		r, _, _ := procReadConsoleInputW.Call(
+			uintptr(h),
+			uintptr(unsafe.Pointer(&record)),
+			1,
+			uintptr(unsafe.Pointer(&n)),
+		)
+		if r == 0 || n == 0 {
+			return
+		}
 		if ctx.Err() != nil {
 			return
 		}
-		if r != waitObject0 {
+		key, ok := keyByteFromRecord(record)
+		if !ok {
 			continue
 		}
-		var n uint32
-		if err := syscall.ReadFile(h, buf[:], &n, nil); err != nil || n == 0 {
+		select {
+		case <-ctx.Done():
 			return
-		}
-		if !sendKeys(ctx, keys, buf[:n]) {
-			return
+		case keys <- key:
 		}
 	}
+}
+
+// keyByteFromRecord 只接受 KEY_EVENT 的 key-down 且 UnicodeChar 非 0 的记录。
+func keyByteFromRecord(record inputRecord) (byte, bool) {
+	if record.EventType != keyEventType {
+		return 0, false
+	}
+	if binary.LittleEndian.Uint32(record.Event[0:4]) == 0 {
+		return 0, false
+	}
+	ch := binary.LittleEndian.Uint16(record.Event[10:12])
+	if ch == 0 || ch > 0x7F {
+		return 0, false
+	}
+	return byte(ch), true
 }
 
 // readStreamKeys 从任意 reader 逐字节读取；EOF 时返回。
@@ -120,28 +174,26 @@ func readStreamKeys(ctx context.Context, r io.Reader, keys chan<- byte) {
 	}
 }
 
-// isTTY 报告 out 是否为本进程的控制台输出；重定向到管道/文件时为 false。
+// isTTY 检查实际输出 writer 的控制台句柄；非 *os.File（管道/内存 writer）不是 TTY。
 func isTTY(out io.Writer) bool {
-	if out != io.Writer(os.Stdout) && out != io.Writer(os.Stderr) {
+	f, ok := out.(*os.File)
+	if !ok {
 		return false
 	}
-	h, _, _ := procGetStdHandle.Call(stdHandle(stdOutputHandle))
-	if h == 0 || h == invalidHandle {
-		return false
-	}
-	var mode uint32
-	r, _, _ := procGetConsoleMode.Call(h, uintptr(unsafe.Pointer(&mode)))
-	return r != 0
+	_, ok = consoleMode(f.Fd())
+	return ok
 }
 
-// enableVT 为控制台输出开启 ANSI 转义序列；失败时 Run 退回单行模式，不写回车。
-func enableVT() bool {
-	h, _, _ := procGetStdHandle.Call(stdHandle(stdOutputHandle))
-	if h == 0 || h == invalidHandle {
+// enableVT 为实际输出 writer 的控制台开启 ANSI 转义序列；失败时 Run 退回
+// 单行模式，不写回车。
+func enableVT(out io.Writer) bool {
+	f, ok := out.(*os.File)
+	if !ok {
 		return false
 	}
-	var mode uint32
-	if r, _, _ := procGetConsoleMode.Call(h, uintptr(unsafe.Pointer(&mode))); r == 0 {
+	h := f.Fd()
+	mode, ok := consoleMode(h)
+	if !ok {
 		return false
 	}
 	if mode&consoleVTProcessing != 0 {

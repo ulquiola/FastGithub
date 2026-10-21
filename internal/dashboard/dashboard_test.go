@@ -181,6 +181,117 @@ func waitDone(t *testing.T, done <-chan error) {
 	}
 }
 
+// waitFor 轮询等待断言成立，避免依赖固定的 sleep 时长。
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("等待 %s 超时", what)
+}
+
+// fakeRefreshTicker 记录 Stop 是否被调用，验证 Run 不泄漏刷新定时器。
+type fakeRefreshTicker struct {
+	ch      chan time.Time
+	stopped atomic.Bool
+}
+
+func (f *fakeRefreshTicker) C() <-chan time.Time { return f.ch }
+func (f *fakeRefreshTicker) Stop()               { f.stopped.Store(true) }
+
+// Input 是 Run 的读键测试缝：按键触发回调，q 立即返回并停止 ticker。
+func TestRunInputKeyTriggersActionAndQuit(t *testing.T) {
+	out := &lockedBuffer{}
+	input := make(chan byte, 8)
+	var copied atomic.Int32
+	_, done := runAsync(t, Options{
+		Version:   "v1",
+		ProxyAddr: "127.0.0.1:38457",
+		UIAddr:    "127.0.0.1:38470",
+		Input:     input,
+		Out:       out,
+		CopyProxy: func() error {
+			copied.Add(1)
+			return nil
+		},
+	})
+	waitForOutput(t, out)
+
+	input <- '2'
+	waitFor(t, "复制回调与反馈", func() bool {
+		return copied.Load() == 1 && strings.Contains(out.String(), "已复制代理地址: 127.0.0.1:38457")
+	})
+
+	started := time.Now()
+	input <- 'q'
+	waitDone(t, done)
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("q 返回耗时 %v，期望 1s 内", elapsed)
+	}
+	got := out.String()
+	if !strings.Contains(got, "正在退出 FastGithub...") {
+		t.Fatalf("q 应打印退出提示，实际 %q", got)
+	}
+	if strings.Contains(got, "\r") {
+		t.Fatalf("非 TTY 输出不应包含回车符：%q", got)
+	}
+}
+
+func TestRunStopsRefreshTicker(t *testing.T) {
+	old := newRefreshTicker
+	t.Cleanup(func() { newRefreshTicker = old })
+	fake := &fakeRefreshTicker{ch: make(chan time.Time, 1)}
+	var gotInterval time.Duration
+	newRefreshTicker = func(d time.Duration) refreshTicker {
+		gotInterval = d
+		return fake
+	}
+
+	out := &lockedBuffer{}
+	input := make(chan byte, 1)
+	_, done := runAsync(t, Options{Version: "v1", Input: input, Out: out})
+	waitForOutput(t, out)
+
+	// 假 ticker 触发一次重绘，覆盖 Run 的定时刷新分支。
+	initialLines := strings.Count(out.String(), "\n")
+	fake.ch <- time.Now()
+	waitFor(t, "定时重绘", func() bool {
+		return strings.Count(out.String(), "\n") > initialLines
+	})
+
+	input <- 'q'
+	waitDone(t, done)
+
+	if gotInterval != refreshIntervalPlain {
+		t.Fatalf("非 TTY 刷新间隔 = %v，期望 %v", gotInterval, refreshIntervalPlain)
+	}
+	if !fake.stopped.Load() {
+		t.Fatal("Run 返回后 ticker 未 Stop")
+	}
+}
+
+// 已关闭的输入通道只让面板停止收键，不能自行退出。
+func TestRunClosedInputKeepsRunningUntilCancel(t *testing.T) {
+	out := &lockedBuffer{}
+	input := make(chan byte)
+	close(input)
+	cancel, done := runAsync(t, Options{Version: "v1", Input: input, Out: out})
+	waitForOutput(t, out)
+
+	select {
+	case err := <-done:
+		t.Fatalf("输入关闭后面板不应退出，实际返回 %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
+	waitDone(t, done)
+}
+
 // 非 TTY（测试里 Out 是内存 buffer）只打印单行状态，且绝不出现回车符。
 func TestRunNonTTYOneLine(t *testing.T) {
 	out := &lockedBuffer{}
@@ -189,7 +300,6 @@ func TestRunNonTTYOneLine(t *testing.T) {
 		ProxyAddr: "127.0.0.1:38457",
 		UIAddr:    "127.0.0.1:38470",
 		Intercept: "已关闭",
-		NoTTY:     true,
 		Out:       out,
 	})
 
@@ -231,7 +341,6 @@ func TestRunAutoOpen(t *testing.T) {
 				UIAddr:    "127.0.0.1:38470",
 				AutoOpen:  tc.auto,
 				OpenUI:    func() error { opened.Add(1); return nil },
-				NoTTY:     true,
 				Out:       out,
 			})
 			waitForOutput(t, out)
@@ -253,7 +362,6 @@ func TestRunAutoOpenFailureKeepsPanel(t *testing.T) {
 		UIAddr:    "127.0.0.1:38470",
 		AutoOpen:  true,
 		OpenUI:    func() error { return errForTest },
-		NoTTY:     true,
 		Out:       out,
 	})
 	waitForOutput(t, out)

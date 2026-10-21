@@ -10,8 +10,15 @@ import (
 	"strings"
 )
 
+// inputSession 在非 Windows 平台没有需要恢复的终端模式。
+type inputSession struct{}
+
+func acquireInput() inputSession { return inputSession{} }
+
+func (inputSession) restore() {}
+
 // readKeys 在非 Windows 平台按行读取并映射首字符；ctx 取消或 stdin 结束时关闭通道。
-func readKeys(ctx context.Context, keys chan<- byte) {
+func (inputSession) readKeys(ctx context.Context, keys chan<- byte) {
 	defer close(keys)
 	reader := bufio.NewReader(os.Stdin)
 	for {
@@ -41,4 +48,4 @@ func isTTY(out io.Writer) bool {
 }
 
 // enableVT 在非 Windows 平台的终端默认支持 ANSI 转义序列。
-func enableVT() bool { return true }
+func enableVT(io.Writer) bool { return true }
