@@ -52,10 +52,13 @@ macOS 没有透明拦截，浏览器需要走系统代理：Web UI 的“系统�
 
 ```console
 $ make test
+$ make bench              # 配置匹配 / DNS 解析 / MITM h1 vs h2
 $ make ci                 # 测试 + vet + gofmt + 六目标交叉编译
 $ make fetch-windivert    # 下载并校验 WinDivert 2.2.2 到 windivert/
 $ VERSION=v0.1.0 make release
 ```
+
+基准结果与结论见 [docs/benchmarks-2026-10-21.md](docs/benchmarks-2026-10-21.md)：串行单请求 h2 有固定开销，8 并发时 h2 比 h1 快约 10%。
 
 发布产物在 `dist/fastgithub-<os>-<arch>.zip`，包含可执行文件、`fastgithub.toml`、`conf.d/`、README 与 LICENSE；存在 `windivert/` 时仅随 `windows/amd64` 包一并打包。Windows 上没有 make 时可直接运行 `bash scripts/ci.sh`。
 
