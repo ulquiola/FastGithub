@@ -53,21 +53,19 @@ GitHub 页面元素多、并发请求密集，h1.1 的队头阻塞直接吃掉�
 
 ### 3.2 服务端如何拿到 h2
 
-`http.Server.Serve` 不会注册 h2 处理器，只有 `ServeTLS` 内部会调用 `setupHTTP2_ServeTLS`。当前实现用的是 `srv.Serve(&singleConnListener{conn})`，且 `conn` 已经是握手完成的 `*tls.Conn`。
+`http.Server.Serve` 不会注册 h2 处理器，只有 `ServeTLS` 内部会调用 `setupHTTP2_ServeTLS`。
 
-利用标准库的两个既有行为：
-
-1. `tls.Server(conn, cfg)` 对已是 `*tls.Conn` 的入参**原样返回**（只覆盖 `config` 字段），不会二次握手；
-2. `ServeTLS(listener, "", "")` 在 `TLSConfig` 已有 `GetCertificate` 时不加载证书文件。
-
-因此 `serveOneHTTP` 改为：
+**已用 spike 验证（Go 1.26.5）的正确做法**：不要自己先握手，把**原始 `net.Conn` 直接交给 `ServeTLS`**，由它完成握手（`GetCertificate` 按 SNI 选叶子证书）并注册 h2：
 
 ```go
-srv := &http.Server{Handler: handler, TLSConfig: tlsConn.Config(), ...}
-go srv.ServeTLS(&singleConnListener{conn: tlsConn}, "", "")
+srv := &http.Server{Handler: handler, TLSConfig: cfg, ReadHeaderTimeout: 10 * time.Second}
+go srv.ServeTLS(&singleConnListener{conn: rawConn}, "", "")
 ```
 
-若该假设在实测中不成立（见 §6 风险），备选方案是显式构造 `http2.Server`——但那需要引入 `golang.org/x/net/http2`，会破坏"零第三方依赖"约束，因此优先走标准库路径。
+**已验证的错误做法**：先 `tls.Server(...).Handshake()` 再把 `*tls.Conn` 交给 `ServeTLS`。Go 1.26 的 `tls.Server` 不再原样复用已包装连接，`ServeTLS` 会二次握手并报
+`http: TLS handshake error ... first record does not look like a TLS handshake`。当前 `serveOneHTTP` 的"先握手再托管"结构必须一并改掉。
+
+`TLSConfig` 已有 `GetCertificate` 时 `ServeTLS("", "")` 不会尝试加载证书文件。若该路径在目标 Go 版本上失效，备选是显式使用 `http2.Server`——但那需要 `golang.org/x/net/http2`，会破坏零依赖约束，因此优先标准库路径。
 
 ### 3.3 上游 transport
 
