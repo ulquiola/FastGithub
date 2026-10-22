@@ -62,7 +62,6 @@ type Domain struct {
 	TLSIgnoreNameMismatch bool      `toml:"tls_ignore_name_mismatch"`
 	Timeout               Duration  `toml:"timeout"`
 	IP                    string    `toml:"ip"`
-	DNS                   string    `toml:"dns"`
 	Destination           string    `toml:"destination"`
 	Response              *Response `toml:"response"`
 
@@ -212,12 +211,6 @@ func (c *Config) Validate() error {
 		}
 		if d.IP != "" && net.ParseIP(d.IP) == nil {
 			add("域名规则 %q 的 ip 无法解析: %s", name, d.IP)
-		}
-		if d.DNS != "" {
-			u, err := url.Parse(d.DNS)
-			if err != nil || u.Scheme != "https" || u.Host == "" {
-				add("域名规则 %q 的 dns 必须是 https URL", name)
-			}
 		}
 		if d.Destination != "" {
 			if _, err := url.Parse(d.Destination); err != nil {

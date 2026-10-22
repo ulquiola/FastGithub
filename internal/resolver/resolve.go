@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"fastgithub-go/internal/config"
@@ -37,9 +36,6 @@ type Resolver struct {
 	now      func() time.Time
 	// queryFn 仅供测试注入；为空时走真实的 DoH/明文 DNS。
 	queryFn func(context.Context, string) ([]net.IP, uint32, error)
-
-	customMu sync.Mutex
-	custom   map[string]*Resolver
 }
 
 // New 用 dns.* 配置构造解析器。

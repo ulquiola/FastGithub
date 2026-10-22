@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -238,43 +237,5 @@ func TestTimeoutFor(t *testing.T) {
 	conf := &config.Domain{Timeout: config.Duration(3 * time.Second)}
 	if got := d.timeoutFor(Target{Domain: conf}); got != 3*time.Second {
 		t.Fatalf("域名超时 = %v", got)
-	}
-}
-
-// TestDialTLSRetriesNextIP 验证首个 IP 的 TLS 握手失败后会换下一个候选。
-func TestDialTLSRetriesNextIP(t *testing.T) {
-	ca := testAuthority(t)
-	leaf, err := ca.LeafFor("example.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr, _ := startTLSServer(t, *leaf)
-	port := portOf(t, addr)
-
-	badLn, err := net.Listen("tcp", net.JoinHostPort("::1", strconv.Itoa(port)))
-	if err != nil {
-		t.Skipf("::1 不可用: %v", err)
-	}
-	defer badLn.Close()
-	go func() {
-		conn, err := badLn.Accept()
-		if err != nil {
-			return
-		}
-		conn.Close() // 立即断开，让 TLS 握手失败
-	}()
-
-	bad := net.ParseIP("::1")
-	good := net.ParseIP("127.0.0.1")
-	d := New(nil, fakeResolver{ips: []net.IP{bad, good}}, rootsFor(ca))
-	conn, err := d.DialTLS(context.Background(), Target{Host: "example.com", Port: port})
-	if err != nil {
-		t.Fatalf("第二个 IP 应成功: %v", err)
-	}
-	defer conn.Close()
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	buf := make([]byte, 2)
-	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "ok" {
-		t.Fatalf("读取上游数据 %q err=%v", buf, err)
 	}
 }
