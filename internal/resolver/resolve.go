@@ -34,8 +34,6 @@ type Resolver struct {
 	health   *sourceHealth
 	racer    *racer
 	now      func() time.Time
-	// queryFn 仅供测试注入；为空时走真实的 DoH/明文 DNS。
-	queryFn func(context.Context, string) ([]net.IP, uint32, error)
 }
 
 // New 用 dns.* 配置构造解析器。
@@ -105,9 +103,6 @@ func (r *Resolver) resolve(ctx context.Context, domain string) ([]net.IP, error)
 
 // query 执行 A/AAAA 查询并合并去重，不读写缓存。
 func (r *Resolver) query(ctx context.Context, domain string) ([]net.IP, uint32, error) {
-	if r.queryFn != nil {
-		return r.queryFn(ctx, domain)
-	}
 	// dns.timeout 是整次解析的总预算，避免源越多耗时线性增长。
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()

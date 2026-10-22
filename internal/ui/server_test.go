@@ -4,12 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,7 +17,6 @@ import (
 	"fastgithub-go/internal/certs"
 	"fastgithub-go/internal/config"
 	"fastgithub-go/internal/flow"
-	"fastgithub-go/internal/resolver"
 	"fastgithub-go/internal/sysproxy"
 )
 
@@ -396,77 +392,5 @@ func TestSystemProxyEndpoints(t *testing.T) {
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || enabled || len(calls) != 2 {
 		t.Fatalf("status=%d enabled=%v calls=%v body=%s", rec.Code, enabled, calls, rec.Body.String())
-	}
-}
-
-func TestDiagnoseEndpoint(t *testing.T) {
-	var gotHost string
-	s := New(Options{
-		Config: config.Default(), Token: "testtoken",
-		Tracker: flow.NewTracker(1), Ring: flow.NewRing(1),
-		Diagnose: func(_ context.Context, host string) (resolver.Diagnosis, error) {
-			gotHost = host
-			return resolver.Diagnosis{
-				Host:     host,
-				Duration: 1500 * time.Millisecond,
-				Candidates: []resolver.Candidate{
-					{IP: net.ParseIP("140.82.112.3"), Latency: 42 * time.Millisecond, OK: true, Probed: true},
-					{IP: net.ParseIP("20.205.243.166"), OK: false, Probed: true},
-				},
-			}, nil
-		},
-	})
-
-	rec := httptest.NewRecorder()
-	s.Handler().ServeHTTP(rec, localRequest(http.MethodGet, "/api/diagnose?host=github.com"))
-	if rec.Code != http.StatusOK || gotHost != "github.com" {
-		t.Fatalf("status=%d host=%q body=%s", rec.Code, gotHost, rec.Body.String())
-	}
-	var body diagnoseResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	if body.Host != "github.com" || body.DurationMS != 1500 || len(body.Candidates) != 2 {
-		t.Fatalf("body = %+v", body)
-	}
-	if !body.Candidates[0].OK || body.Candidates[0].LatencyMS != 42 {
-		t.Fatalf("candidate = %+v", body.Candidates[0])
-	}
-}
-
-func TestDiagnoseRejectsInvalidHost(t *testing.T) {
-	called := false
-	s := New(Options{
-		Config: config.Default(), Token: "testtoken",
-		Tracker: flow.NewTracker(1), Ring: flow.NewRing(1),
-		Diagnose: func(context.Context, string) (resolver.Diagnosis, error) {
-			called = true
-			return resolver.Diagnosis{}, nil
-		},
-	})
-	for _, host := range []string{"", "http://github.com", "github.com:443", "a b", "github.com/path"} {
-		rec := httptest.NewRecorder()
-		s.Handler().ServeHTTP(rec, localRequest(http.MethodGet, "/api/diagnose?host="+url.QueryEscape(host)))
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("host=%q status=%d", host, rec.Code)
-		}
-	}
-	if called {
-		t.Fatal("非法 host 不应调用诊断")
-	}
-}
-
-func TestDiagnoseReportsError(t *testing.T) {
-	s := New(Options{
-		Config: config.Default(), Token: "testtoken",
-		Tracker: flow.NewTracker(1), Ring: flow.NewRing(1),
-		Diagnose: func(context.Context, string) (resolver.Diagnosis, error) {
-			return resolver.Diagnosis{}, errors.New("dns 失败")
-		},
-	})
-	rec := httptest.NewRecorder()
-	s.Handler().ServeHTTP(rec, localRequest(http.MethodGet, "/api/diagnose?host=example.com"))
-	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "dns 失败") {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

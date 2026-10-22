@@ -19,20 +19,55 @@ type racer struct {
 
 const maxRaceCandidates = 32
 
-// Candidate 是单个候选 IP 的探测结果。
-type Candidate struct {
-	IP      net.IP        `json:"ip"`
-	Latency time.Duration `json:"-"`
-	OK      bool          `json:"ok"`
-	Probed  bool          `json:"probed"`
-}
-
-// Sort 对候选 IP 排序；全部失败时保持原序。
 func (r *racer) Sort(ctx context.Context, ips []net.IP) []net.IP {
-	candidates := r.Probe(ctx, ips)
+	now := r.now()
+	type probe struct {
+		idx     int
+		ip      net.IP
+		latency time.Duration
+		ok      bool
+	}
+	probeCount := len(ips)
+	if probeCount > maxRaceCandidates {
+		probeCount = maxRaceCandidates
+	}
+	tail := ips[probeCount:]
+	probes := make([]probe, probeCount)
+	var wg sync.WaitGroup
+	for i := 0; i < probeCount; i++ {
+		ip := ips[i]
+		probes[i] = probe{idx: i, ip: ip}
+		if latency, ok, found := r.latency.get(ip.String(), now); found {
+			probes[i].latency, probes[i].ok = latency, ok
+			continue
+		}
+		wg.Add(1)
+		go func(p *probe) {
+			defer wg.Done()
+			start := r.now()
+			attemptCtx, cancel := context.WithTimeout(ctx, r.timeout)
+			conn, err := r.dial(attemptCtx, "tcp", net.JoinHostPort(p.ip.String(), r.port))
+			cancel()
+			if err != nil {
+				if conn != nil {
+					conn.Close()
+				}
+				if ctx.Err() == nil {
+					r.latency.put(p.ip.String(), 0, false, now)
+				}
+				return
+			}
+			conn.Close()
+			p.ok = true
+			p.latency = r.now().Sub(start)
+			r.latency.put(p.ip.String(), p.latency, true, now)
+		}(&probes[i])
+	}
+	wg.Wait()
+
 	anyOK := false
-	for _, c := range candidates {
-		if c.OK {
+	for _, p := range probes {
+		if p.ok {
 			anyOK = true
 			break
 		}
@@ -40,83 +75,29 @@ func (r *racer) Sort(ctx context.Context, ips []net.IP) []net.IP {
 	if !anyOK {
 		return ips
 	}
-	sortCandidates(candidates)
-	out := make([]net.IP, 0, len(candidates))
-	for _, c := range candidates {
-		out = append(out, c.IP)
+	sort.SliceStable(probes, func(i, j int) bool {
+		if probes[i].ok != probes[j].ok {
+			return probes[i].ok
+		}
+		if !probes[i].ok {
+			return probes[i].idx < probes[j].idx
+		}
+		if probes[i].latency != probes[j].latency {
+			return probes[i].latency < probes[j].latency
+		}
+		return probes[i].idx < probes[j].idx
+	})
+	out := make([]net.IP, 0, len(ips))
+	for _, p := range probes {
+		if p.ok {
+			out = append(out, p.ip)
+		}
+	}
+	out = append(out, tail...)
+	for _, p := range probes {
+		if !p.ok {
+			out = append(out, p.ip)
+		}
 	}
 	return out
-}
-
-// Probe 探测候选 IP，优先使用时延缓存（常规解析路径）。
-func (r *racer) Probe(ctx context.Context, ips []net.IP) []Candidate {
-	return r.probe(ctx, ips, true)
-}
-
-// ProbeFresh 忽略时延缓存重新探测（诊断路径）。
-func (r *racer) ProbeFresh(ctx context.Context, ips []net.IP) []Candidate {
-	return r.probe(ctx, ips, false)
-}
-
-func (r *racer) probe(ctx context.Context, ips []net.IP, useCache bool) []Candidate {
-	now := r.now()
-	candidates := make([]Candidate, len(ips))
-	for i, ip := range ips {
-		candidates[i] = Candidate{IP: ip}
-	}
-	probeCount := len(candidates)
-	if probeCount > maxRaceCandidates {
-		probeCount = maxRaceCandidates
-	}
-
-	var wg sync.WaitGroup
-	for i := 0; i < probeCount; i++ {
-		c := &candidates[i]
-		if useCache {
-			if latency, ok, found := r.latency.get(c.IP.String(), now); found {
-				c.Latency, c.OK, c.Probed = latency, ok, true
-				continue
-			}
-		}
-		wg.Add(1)
-		go func(c *Candidate) {
-			defer wg.Done()
-			start := r.now()
-			attemptCtx, cancel := context.WithTimeout(ctx, r.timeout)
-			conn, err := r.dial(attemptCtx, "tcp", net.JoinHostPort(c.IP.String(), r.port))
-			cancel()
-			c.Probed = true
-			if err != nil {
-				if conn != nil {
-					conn.Close()
-				}
-				if useCache && ctx.Err() == nil {
-					r.latency.put(c.IP.String(), 0, false, now)
-				}
-				return
-			}
-			conn.Close()
-			c.OK = true
-			c.Latency = r.now().Sub(start)
-			if useCache {
-				r.latency.put(c.IP.String(), c.Latency, true, now)
-			}
-		}(c)
-	}
-	wg.Wait()
-	return candidates
-}
-
-// sortCandidates 把可用项按延迟升序排在前面，失败/未探测项保持原序。
-func sortCandidates(candidates []Candidate) {
-	sort.SliceStable(candidates, func(i, j int) bool {
-		a, b := candidates[i], candidates[j]
-		if a.OK != b.OK {
-			return a.OK
-		}
-		if !a.OK {
-			return false
-		}
-		return a.Latency < b.Latency
-	})
 }
