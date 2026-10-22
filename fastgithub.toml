@@ -25,3 +25,8 @@ driver_dir = ""
 [log]
 level = "info"
 file  = "logs/fastgithub.log"
+
+# 备用 IP：DNS 只返回不可达 IP 时参与 TCP 竞速。内置了 github.com、api.github.com、
+# codeload.github.com 的默认值；需要覆盖时取消注释。键必须是精确域名，不支持通配。
+# [fallback_ips]
+# "github.com" = ["140.82.113.3", "140.82.114.3"]

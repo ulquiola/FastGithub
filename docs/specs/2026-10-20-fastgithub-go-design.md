@@ -54,7 +54,7 @@
 ### 2.2 关键机制
 
 - **DNS 净化**：dnscrypt-proxy（本地端口）优先，失败回退到配置的明文 DNS；仅使用支持 TCP 的 DNS，避免 UDP 被污染；A/AAAA 并发查询。
-- **测速选路**：对所有候选 IP 并发 TCP 建连，最快者置首位；结果缓存 5 分钟，故障缓存 1 分钟。
+- **测速选路**：对所有候选 IP 并发 TCP 建连，最快者置首位；结果缓存 5 分钟，故障缓存 1 分钟。DNS 只返回单个不可达 IP 时，用 `fallback_ips` 配置的备用 IP 兜底。
 - **MITM 控制**：按域名配置决定是否发 SNI、SNI 用什么值（`@domain`/`@ipaddress`/`@random`）、是否容忍证书名不匹配、是否强制指定 IP、是否改写到别的 `Destination`、是否直接短路返回自定义响应。
 - **Windows 透明性**：DNS 应答改成 `127.0.0.1`/`::1`，流量自然打到本地回环监听；若 443/80/22/9418 被占用，监听器顺延到其他端口，再由 WinDivert 把目标端口改写到实际端口。
 
@@ -182,7 +182,7 @@ cmd/fastgithub ──► internal/app
 | 端口被占用（显式代理 / UI） | 启动失败并提示改 `server.proxy_port` / `server.ui_port` |
 | 透明端口被占用 | 顺延到下一个空闲端口，由拦截层重映射（不失败） |
 | 所有 DNS 源失败 | 返回 `502` 并在响应体给出尝试过的解析器；不缓存空结果超过 30s |
-| 上游全部 IP 连接失败 | 逐个尝试后返回错误，错误体内含每个 IP 的失败原因 |
+| 上游全部 IP 连接失败 | 依次尝试 DNS 答案与 `fallback_ips`，全部失败后返回错误，错误体内含每个 IP 的失败原因 |
 | CA 安装失败 | 告警并输出手动安装指引，不中断服务 |
 | WinDivert 缺失 / 非管理员 / 打开失败 | 告警并降级为显式代理模式，其余功能正常 |
 | UI 变更接口令牌错误 | `401`，不泄露内部状态 |
@@ -257,6 +257,8 @@ content      = "这是一个用于示范配置的域名"
 | `Response.ContentValue` | `response.content` | — | |
 | `Serilog.*` | `[log]` | `info` | 仅保留级别与文件 |
 
+Go 版新增 `[fallback_ips]`（精确域名 → IP 列表），用于 DNS 只返回不可达 IP 时兜底；原版没有对应字段。
+
 ### 6.4 解析器
 
 自研 TOML 子集，只支持：`[table]`、`[table."quoted.key"]`、`key = value`（字符串、整数、布尔、字符串数组、内联表不支持）、`#` 注释、基本转义。**未知键报错**而非忽略，配合 `config validate` 把拼写错误挡在启动前。同一文件内重复表头（如两次 `[a]`）会合并到同一张表，解析器不报错；这是 `conf.d` 片段逐文件解析的宽松行为。
@@ -274,6 +276,7 @@ content      = "这是一个用于示范配置的域名"
 - 报文：自实现 DNS 编解码（question/answer、A/AAAA、压缩指针只读不写），约 300 行。
 - 缓存：`domain→[]IP`（TTL 夹逼 30s~10min，CNAME 链取整链最小 TTL）、`IP→latency`（正常 5min / 故障 1min）。并发同键请求用 `singleflight`（自实现，约 40 行）。
 - 竞速：对候选 IP 并发 TCP 拨号（2s 上限，最多探测 32 个），最快者置首位；全部失败则按原序返回。
+- 备用 IP：`fallback_ips` 按精确域名配置，dialer 在 DNS 答案之外并入候选并一起竞速；时延缓存按 `ip:port` 区分，避免 443/80/22 互相污染。
 - 负缓存：非 socket 错误 30s，`*net.OpError` 10min（对齐原版 `minTimeToLive`/`maxTimeToLive`）。
 
 ### 7.2 dialer
@@ -289,7 +292,7 @@ func (d *Dialer) DialTCP(ctx context.Context, t Target) (net.Conn, error)
 func (d *Dialer) DialTLS(ctx context.Context, t Target) (*tls.Conn, error)
 ```
 
-- IP 顺序：`conf.IP` 优先 → resolver 结果（竞速排序）。
+- IP 顺序：`conf.IP` 优先 → resolver 结果 + `fallback_ips`（一起竞速排序）。
 - SNI：`conf.SNIPattern()` 展开 `@domain`/`@ipaddress`/`@random`，结果为空则不发 SNI。
   - 注意：当 SNI 值为 IP 字面量时，Go 与 .NET 都**不会**在 ClientHello 中发送 SNI（RFC 6066 禁止）。因此 `@ipaddress` 的实际效果等于不发 SNI，该等价性写入测试用例。
 - 证书校验：`InsecureSkipVerify=true` + 自定义 `VerifyConnection`（同时覆盖 TLS 1.3 会话恢复）：

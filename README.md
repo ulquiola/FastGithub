@@ -63,8 +63,18 @@ macOS / Linux 没有透明拦截，需要让浏览器走 `127.0.0.1:38457`，或
 | `server.singleton` | `true` | 阻止多实例（Unix `flock`，Windows 命名互斥量） |
 | `server.transparent.*` | `443/80/22/9418` | 透明入口偏好端口，被占用时自动顺延 |
 | `dns.doh` | `doh.pub`、`alidns.com` | DoH 端点，失败回退 TCP 53 |
+| `fallback_ips` | 内置 GitHub 列表 | 精确域名 → 备用 IP 列表，与 DNS 答案一起 TCP 竞速 |
 | `intercept.mode` | `auto` | `auto` / `off`；`off` 时只保留显式代理 |
 | `log.level` / `log.file` | `info` / `logs/fastgithub.log` | 请求日志 |
+
+`fallback_ips` 用于兜底“DNS 只返回一个区域 IP，而该 IP 当前不可达”的情况。内置了 `github.com`、`api.github.com`、`codeload.github.com` 的备用 IP，可在 `fastgithub.toml` 中覆盖：
+
+```toml
+[fallback_ips]
+"github.com" = ["140.82.113.3", "140.82.114.3"]
+```
+
+键必须是精确域名（不支持通配），备用 IP 与 DNS 答案一起做 TCP 竞速，只有可达的才会被选用；上游证书仍会正常校验。
 
 ## HTTP/2
 
