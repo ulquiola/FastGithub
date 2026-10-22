@@ -63,6 +63,7 @@ macOS / Linux 没有透明拦截，需要让浏览器走 `127.0.0.1:38457`，或
 | `server.singleton` | `true` | 阻止多实例（Unix `flock`，Windows 命名互斥量） |
 | `server.transparent.*` | `443/80/22/9418` | 透明入口偏好端口，被占用时自动顺延 |
 | `dns.doh` | `doh.pub`、`alidns.com` | DoH 端点，失败回退 TCP 53 |
+| `domains."...".dns` | 空 | 该域名专用的 DoH 源；空则用 `dns.doh` |
 | `intercept.mode` | `auto` | `auto` / `off`；`off` 时只保留显式代理 |
 | `log.level` / `log.file` | `info` / `logs/fastgithub.log` | 请求日志 |
 
@@ -76,6 +77,22 @@ http2 = false   # 全部回落到 HTTP/1.1，用于排查个别站点在 h2 下�
 ```
 
 串行单请求 h2 有固定开销，8 并发时比 h1 快约 10%——数据见 [docs/benchmarks-2026-10-21.md](docs/benchmarks-2026-10-21.md)。
+
+## 按域名指定 DNS 源
+
+`dns.doh` 是全局解析链。如果某个域名需要走单独的 DoH（例如全局源被污染，或该域名有专用解析），可以在规则里加 `dns`：
+
+```toml
+[domains."v2ex.com"]
+dns     = "https://uuu.ddd.oaifree.com/query-dns"
+tls_sni = false   # 沿用该站原有的“不发送 SNI”行为
+```
+
+- 只影响这条规则命中的域名，`github.com` 等仍走全局 `dns.doh`；
+- 自定义源失败时会回退到全局解析链，保证可用性；
+- `dns` 必须是 `https://` URL；Web UI 的“域名诊断”也会使用这条规则指定的源；
+- 对 Cloudflare 这类依赖 SNI 的站点，`tls_sni = false` 可能无法握手，需要按站点选择 `tls_sni` / `tls_ignore_name_mismatch`；
+- TLS 握手失败时会自动换下一个候选 IP（例如 IPv6 被重置后回退 IPv4），不会因为竞速选中坏 IP 而直接失败。
 
 ## Web UI
 
