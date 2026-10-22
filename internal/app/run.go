@@ -88,6 +88,7 @@ func serve(ctx context.Context, cfg *config.Config, store *config.Store, proxyLn
 	uiServer := ui.New(ui.Options{
 		Config: cfg, Store: store, Tracker: tracker, Ring: ring, CA: ca,
 		Token: token, Version: Version(), InstallCert: certs.Install,
+		Diagnose: res.Diagnose,
 	})
 	server.SetStats(ui.FlowStatistics(tracker))
 

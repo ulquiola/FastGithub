@@ -87,6 +87,26 @@
         <ul id="logs" class="logs"></ul>
       </article>
     </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>域名诊断</h2>
+        <span id="diagnose-summary" class="muted">输入域名，查看解析到的 IP 与 TCP 443 延迟</span>
+      </div>
+      <div class="diagnose-bar">
+        <input id="diagnose-host" class="input" value="github.com" spellcheck="false" autocomplete="off">
+        <button id="diagnose-run" class="btn primary">诊断</button>
+        <button class="btn ghost" data-host="linux.do">linux.do</button>
+        <button class="btn ghost" data-host="v2ex.com">v2ex.com</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>IP</th><th class="num">TCP 443</th><th>结果</th></tr></thead>
+          <tbody id="diagnose-rows"></tbody>
+        </table>
+      </div>
+      <p id="diagnose-recent" class="hint">最近请求：本次会话暂无记录</p>
+    </section>
   </main>
 
   <div id="toast" class="toast" hidden></div>

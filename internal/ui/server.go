@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
@@ -11,10 +12,12 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"fastgithub-go/internal/certs"
 	"fastgithub-go/internal/config"
 	"fastgithub-go/internal/flow"
+	"fastgithub-go/internal/resolver"
 	"fastgithub-go/internal/sysproxy"
 )
 
@@ -37,6 +40,8 @@ type Options struct {
 	SystemProxyStatus  func(int) (sysproxy.Status, error)
 	EnableSystemProxy  func(int) error
 	DisableSystemProxy func(int) error
+
+	Diagnose func(context.Context, string) (resolver.Diagnosis, error)
 }
 
 // Server 提供内嵌页面、REST、SSE 与兼容端点。
@@ -64,6 +69,9 @@ func New(opts Options) *Server {
 	if opts.DisableSystemProxy == nil {
 		opts.DisableSystemProxy = sysproxy.Disable
 	}
+	if opts.Diagnose == nil && opts.Config != nil {
+		opts.Diagnose = resolver.New(opts.Config.DNS).Diagnose
+	}
 	s := &Server{opts: opts, mux: http.NewServeMux()}
 	s.mux.HandleFunc("/", s.index)
 	s.mux.HandleFunc("/app.js", staticAsset("assets/app.js", "application/javascript; charset=utf-8"))
@@ -78,6 +86,7 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("/api/systemproxy", s.systemProxy)
 	s.mux.HandleFunc("/api/systemproxy/enable", s.enableSystemProxy)
 	s.mux.HandleFunc("/api/systemproxy/disable", s.disableSystemProxy)
+	s.mux.HandleFunc("/api/diagnose", s.diagnose)
 	s.mux.HandleFunc("/api/intercept", s.intercept)
 	s.mux.Handle("/flowStatistics", FlowStatistics(opts.Tracker))
 	return s
@@ -340,6 +349,81 @@ func (s *Server) disableSystemProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) diagnose(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
+	host := strings.TrimSpace(r.URL.Query().Get("host"))
+	if !validDiagnoseHost(host) {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": "无效的域名"})
+		return
+	}
+	if s.opts.Diagnose == nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": "诊断未配置"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	diagnosis, err := s.opts.Diagnose(ctx, host)
+	if err != nil {
+		writeJSONStatus(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	resp := diagnoseResponse{
+		Host:       diagnosis.Host,
+		DurationMS: diagnosis.Duration.Milliseconds(),
+		Candidates: make([]diagnoseCandidate, 0, len(diagnosis.Candidates)),
+	}
+	for _, c := range diagnosis.Candidates {
+		resp.Candidates = append(resp.Candidates, diagnoseCandidate{
+			IP:        c.IP.String(),
+			LatencyMS: c.Latency.Milliseconds(),
+			OK:        c.OK,
+			Probed:    c.Probed,
+		})
+	}
+	writeJSON(w, resp)
+}
+
+type diagnoseCandidate struct {
+	IP        string `json:"ip"`
+	LatencyMS int64  `json:"latencyMs"`
+	OK        bool   `json:"ok"`
+	Probed    bool   `json:"probed"`
+}
+
+type diagnoseResponse struct {
+	Host       string              `json:"host"`
+	DurationMS int64               `json:"durationMs"`
+	Candidates []diagnoseCandidate `json:"candidates"`
+}
+
+// validDiagnoseHost 只接受域名或 IP 字面量，拒绝 scheme/端口/路径等。
+func validDiagnoseHost(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	if strings.ContainsAny(host, " \t\r\n/:?#@\\") {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 {
+			return false
+		}
+		for _, r := range label {
+			switch {
+			case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			default:
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (s *Server) intercept(w http.ResponseWriter, r *http.Request) {

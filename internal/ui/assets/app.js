@@ -126,11 +126,71 @@ async function loadSystemProxy() {
   }
 }
 
+const recentLogs = [];
+
+function renderDiagnose(d) {
+  const rows = $('diagnose-rows');
+  rows.replaceChildren();
+  const ok = d.candidates.filter(c => c.ok);
+  const fastest = ok.length ? Math.min(...ok.map(c => c.latencyMs)) : null;
+  $('diagnose-summary').textContent = `解析到 ${d.candidates.length} 个 IP` +
+    (fastest === null ? '，均不可用' : `，最快 ${fastest} ms`) +
+    ` · 用时 ${d.durationMs} ms`;
+  for (const c of d.candidates) {
+    const tr = document.createElement('tr');
+    const ip = document.createElement('td');
+    ip.className = 'mono';
+    ip.textContent = c.ip;
+    const latency = document.createElement('td');
+    latency.className = 'num';
+    latency.textContent = c.probed ? (c.ok ? `${c.latencyMs} ms` : '超时') : '未探测';
+    const result = document.createElement('td');
+    result.className = c.ok ? 'diagnose-ok' : 'diagnose-fail';
+    result.textContent = c.ok ? '可用' : (c.probed ? '不可用' : '未探测');
+    tr.append(ip, latency, result);
+    rows.appendChild(tr);
+  }
+  renderRecent(d.host);
+}
+
+function renderRecent(host) {
+  const el = $('diagnose-recent');
+  const entry = recentLogs.find(e => e.domain === host);
+  if (!entry) {
+    el.textContent = `最近请求：本次会话暂无 ${host} 的记录`;
+    return;
+  }
+  el.textContent = `最近请求：${entry.time} ${entry.method} ${entry.status} · ${entry.durationMs} ms`;
+}
+
+async function runDiagnose(host) {
+  host = (host || '').trim();
+  if (!host) return;
+  $('diagnose-host').value = host;
+  const btn = $('diagnose-run');
+  btn.disabled = true;
+  $('diagnose-summary').textContent = `正在诊断 ${host}…`;
+  $('diagnose-rows').replaceChildren();
+  try {
+    const resp = await fetch('/api/diagnose?host=' + encodeURIComponent(host));
+    const body = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(body.error || `HTTP ${resp.status}`);
+    renderDiagnose(body);
+  } catch (e) {
+    $('diagnose-summary').textContent = e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function connectLogs() {
   const list = $('logs');
   const source = new EventSource('/api/logs');
   source.onmessage = event => {
     const e = JSON.parse(event.data);
+    recentLogs.unshift(e);
+    if (recentLogs.length > 200) recentLogs.pop();
+    if (e.domain === $('diagnose-host').value.trim()) renderRecent(e.domain);
     const li = document.createElement('li');
     const time = document.createElement('span');
     time.className = 'time';
@@ -179,6 +239,14 @@ $('disable-sysproxy').onclick = function () {
   }
 };
 $('intercept').onclick = function () { post('/api/intercept', this); };
+
+$('diagnose-run').onclick = function () { runDiagnose($('diagnose-host').value); };
+$('diagnose-host').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') runDiagnose(this.value);
+});
+document.querySelectorAll('[data-host]').forEach(function (btn) {
+  btn.onclick = function () { runDiagnose(btn.dataset.host); };
+});
 
 loadStatus();
 loadDomains();

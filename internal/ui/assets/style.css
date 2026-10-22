@@ -113,6 +113,18 @@ main { max-width: 1180px; margin: 0 auto; padding: 1.4rem 2rem 3rem; display: gr
 .hint { color: var(--muted); font-size: 0.78rem; margin: 0.5rem 0 0.75rem; }
 .actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
 
+.diagnose-bar { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.8rem; }
+.input {
+  flex: 1 1 16rem; min-width: 12rem;
+  padding: 0.55rem 0.8rem; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--card); color: var(--text);
+  font: inherit;
+}
+.input:focus { outline: 2px solid rgba(15,157,88,0.35); border-color: var(--primary); }
+.diagnose-bar .btn.ghost { margin-top: 0; }
+.diagnose-ok { color: #16a34a; font-weight: 600; }
+.diagnose-fail { color: var(--muted); }
+
 .btn {
   appearance: none; border: 0; border-radius: 10px; padding: 0.55rem 0.95rem;
   font: inherit; font-weight: 600; cursor: pointer; color: #fff;
