@@ -124,6 +124,8 @@ $ VERSION=v0.4.1 make release
 
 产物在 `dist/fastgithub-<os>-<arch>.zip`，含可执行文件、`fastgithub.toml`、`conf.d/`、README 与 LICENSE；存在 `windivert/` 时只随 `windows/amd64` 打包。Windows 上没有 make 可直接 `bash scripts/ci.sh`。
 
+GitHub Actions 的 CI 使用 Go 1.27 跑三个平台测试和六目标交叉编译；`go.mod` 的最低版本仍是 1.22。macOS 菜单栏应用需要 `CGO_ENABLED=1`。
+
 ## 已知限制
 
 - **开着透明拦截时，SSH-over-443 会断**。常见写法 `Host github.com / Hostname ssh.github.com / Port 443` 命中了 `*.github.com` 规则，443 被当作 HTTPS 接管。临时办法是让 git 走 22 端口：`git -c core.sshCommand="ssh -p 22 -o HostName=github.com" …`
