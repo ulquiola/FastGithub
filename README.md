@@ -92,6 +92,7 @@ $ open ~/Applications/FastGithub.app
 - 菜单提供：代理状态、打开 Web 界面、系统代理开关、安装/卸载 CA、开机启动、退出；
 - 数据在 `~/Library/Application Support/FastGithub`，升级或重建 `.app` 不会更换 CA 和 `ui.token`；
 - 首次使用请在菜单里点“安装 CA”；旧 CLI 的 CA 可在钥匙串中手动删除；
+- 应用图标在 `assets/AppIcon.icns`，构建时自动打包；Finder 图标如未更新可重新登录或刷新图标缓存；
 - 实测物理内存约 13MB（Activity Monitor 的“内存”）；RSS 约 35MB 是因为包含共享库，不代表实际占用。
 
 菜单栏二进制用 cgo/AppKit 构建，因此只在 macOS 上编译；CLI `fastgithub` 仍保持 `CGO_ENABLED=0` 和六目标交叉编译。
