@@ -1,5 +1,6 @@
 const token = document.querySelector('meta[name="fastgithub-token"]').content;
 const $ = id => document.getElementById(id);
+const SVG_NS = 'http://www.w3.org/2000/svg';
 
 function formatBytes(n) {
   if (!n) return '0 B';
@@ -25,67 +26,121 @@ function showToast(text, ok = true) {
 
 async function loadStatus() {
   const s = await fetch('/api/status').then(r => r.json());
+  const addr = `127.0.0.1:${s.proxyPort}`;
   $('version').textContent = s.version;
-  $('session').textContent = `127.0.0.1:${s.proxyPort}`;
-  const rows = [
-    ['代理端口', s.proxyPort],
-    ['UI 端口', s.uiPort],
-    ['拦截模式', s.intercept],
-    ['CA 指纹', `${s.caFingerprint.slice(0, 16)}…`],
-    ['DNS 源', `DoH ${s.dns.doh} / 回退 ${s.dns.fallback}`],
-    ['PAC', `http://127.0.0.1:${s.proxyPort}/`],
-  ];
-  const list = $('status-list');
-  list.replaceChildren();
-  for (const [key, value] of rows) {
-    const dt = document.createElement('dt');
-    dt.textContent = key;
-    const dd = document.createElement('dd');
-    dd.textContent = value;
-    list.append(dt, dd);
+  $('session').textContent = addr;
+  $('top-proxy').textContent = addr;
+  $('proxy-address').textContent = addr;
+  $('ui-port').textContent = s.uiPort;
+  $('intercept-mode').textContent = s.intercept;
+  $('ca-fingerprint').textContent = `${s.caFingerprint.slice(0, 16)}…`;
+  $('dns-sources').textContent = `DoH ${s.dns.doh} / 回退 ${s.dns.fallback}`;
+}
+
+function renderSparkline(samples) {
+  const svg = $('flow-chart');
+  svg.replaceChildren();
+  if (!samples.length) return;
+  const w = 320;
+  const h = 80;
+  const pad = 4;
+  const max = Math.max(1, ...samples.map(s => Math.max(s.read, s.write)));
+  const points = key => samples.map((s, i) => {
+    const x = samples.length === 1 ? w : (i / (samples.length - 1)) * w;
+    const y = h - pad - (s[key] / max) * (h - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  for (const [key, cls] of [['read', 'spark-read'], ['write', 'spark-write']]) {
+    const poly = document.createElementNS(SVG_NS, 'polyline');
+    poly.setAttribute('points', points(key));
+    poly.setAttribute('class', cls);
+    svg.appendChild(poly);
   }
 }
 
+async function loadFlow() {
+  try {
+    const f = await fetch('/api/flow').then(r => r.json());
+    $('flow-read').textContent = formatBytes(f.totalRead);
+    $('flow-write').textContent = formatBytes(f.totalWrite);
+    $('flow-rate').textContent = `↑ ${formatBytes(f.readRate)}/s · ↓ ${formatBytes(f.writeRate)}/s`;
+    renderSparkline(f.samples || []);
+  } catch (e) {
+    // 单次采样失败不打断页面。
+  }
+}
+
+let allDomains = [];
+
 async function loadDomains() {
-  const domains = await fetch('/api/domains').then(r => r.json());
-  $('domain-count').textContent = `(${domains.length})`;
+  allDomains = await fetch('/api/domains').then(r => r.json());
+  $('domain-count').textContent = `(${allDomains.length})`;
+  renderDomains();
+}
+
+function renderDomains() {
   const body = $('domains');
   body.replaceChildren();
-  for (const d of domains) {
+  const filter = $('domain-filter').value.trim().toLowerCase();
+  const rows = allDomains.filter(d => !filter || d.pattern.toLowerCase().includes(filter));
+  if (!rows.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 2;
+    td.className = 'empty';
+    td.textContent = allDomains.length ? '没有匹配的规则' : '暂无规则';
+    tr.appendChild(td);
+    body.appendChild(tr);
+    return;
+  }
+  const max = Math.max(1, ...allDomains.map(d => d.hits));
+  for (const d of rows) {
     const tr = document.createElement('tr');
     const name = document.createElement('td');
+    name.className = 'mono';
     name.textContent = d.pattern;
     const hits = document.createElement('td');
     hits.className = 'num';
-    hits.textContent = d.hits;
+    const wrap = document.createElement('div');
+    wrap.className = 'hit';
+    const bar = document.createElement('span');
+    bar.className = 'hit-bar';
+    const fill = document.createElement('i');
+    fill.style.width = `${(d.hits / max) * 100}%`;
+    bar.appendChild(fill);
+    const num = document.createElement('span');
+    num.className = 'hit-num';
+    num.textContent = d.hits;
+    wrap.append(bar, num);
+    hits.appendChild(wrap);
     tr.append(name, hits);
     body.appendChild(tr);
   }
 }
 
-async function loadFlow() {
-  const f = await fetch('/flowStatistics').then(r => r.json());
-  $('flow-read').textContent = formatBytes(f.TotalRead);
-  $('flow-write').textContent = formatBytes(f.TotalWrite);
-  $('flow-rate').textContent = `↑ ${formatBytes(f.ReadRate)}/s · ↓ ${formatBytes(f.WriteRate)}/s`;
-}
-
 async function loadCertStatus() {
   const badge = $('cert-status');
+  const top = $('top-cert-status');
   try {
     const s = await fetch('/api/cert/status').then(r => r.json());
     if (s.installed) {
       badge.textContent = s.scope === 'system' ? '已安装 · 系统级' : '已安装 · 用户级';
       badge.className = 'badge ok';
+      top.textContent = '已安装';
+      top.className = 'badge ok';
     } else {
       badge.textContent = '未安装';
       badge.className = 'badge muted';
+      top.textContent = '未安装';
+      top.className = 'badge muted';
     }
     $('install-cert').disabled = s.installed;
     $('uninstall-cert').disabled = !s.installed;
   } catch (e) {
     badge.textContent = '检测失败';
     badge.className = 'badge err';
+    top.textContent = '检测失败';
+    top.className = 'badge err';
     $('install-cert').disabled = false;
     $('uninstall-cert').disabled = false;
   }
@@ -93,44 +148,58 @@ async function loadCertStatus() {
 
 async function loadSystemProxy() {
   const badge = $('sysproxy-status');
+  const top = $('top-sysproxy-status');
   const detail = $('sysproxy-detail');
-  const enable = $('enable-sysproxy');
-  const disable = $('disable-sysproxy');
+  const toggle = $('sysproxy-toggle');
+  const label = $('sysproxy-label');
   try {
     const s = await fetch('/api/systemproxy').then(r => r.json());
     if (!s.supported) {
       badge.textContent = '不可用';
       badge.className = 'badge muted';
+      top.textContent = '不可用';
+      top.className = 'badge muted';
       detail.textContent = s.note || '当前平台请在系统中手动设置代理';
-      enable.disabled = true;
-      disable.disabled = true;
+      toggle.disabled = true;
+      toggle.setAttribute('aria-checked', 'false');
+      label.textContent = '不可用';
       return;
     }
-    if (s.enabled) {
-      badge.textContent = '已启用';
-      badge.className = 'badge ok';
-      detail.textContent = `${s.service} → ${s.server}:${s.port}`;
-    } else {
-      badge.textContent = '未启用';
-      badge.className = 'badge muted';
-      detail.textContent = s.note || (s.service ? `${s.service} 未指向 FastGithub` : '未检测到可用网络服务');
-    }
-    enable.disabled = s.enabled;
-    disable.disabled = !s.enabled;
+    const on = !!s.enabled;
+    badge.textContent = on ? '已启用' : '未启用';
+    badge.className = on ? 'badge ok' : 'badge muted';
+    top.textContent = on ? '已启用' : '未启用';
+    top.className = on ? 'badge ok' : 'badge muted';
+    toggle.disabled = false;
+    toggle.setAttribute('aria-checked', on ? 'true' : 'false');
+    label.textContent = on ? '已启用' : '未启用';
+    detail.textContent = s.note || (s.service ? `${s.service} → ${s.server}:${s.port}` : '未检测到可用网络服务');
   } catch (e) {
     badge.textContent = '检测失败';
     badge.className = 'badge err';
+    top.textContent = '检测失败';
+    top.className = 'badge err';
     detail.textContent = e.message;
-    enable.disabled = false;
-    disable.disabled = true;
+    toggle.disabled = true;
   }
 }
 
-function connectLogs() {
+const logEntries = [];
+
+function renderLogs() {
   const list = $('logs');
-  const source = new EventSource('/api/logs');
-  source.onmessage = event => {
-    const e = JSON.parse(event.data);
+  list.replaceChildren();
+  const filter = $('log-filter').value.trim().toLowerCase();
+  const entries = logEntries.filter(e => !filter ||
+    [e.domain, e.method, String(e.status)].some(v => (v || '').toLowerCase().includes(filter)));
+  if (!entries.length) {
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = logEntries.length ? '没有匹配的请求' : '暂无请求';
+    list.appendChild(li);
+    return;
+  }
+  for (const e of entries) {
     const li = document.createElement('li');
     const time = document.createElement('span');
     time.className = 'time';
@@ -139,7 +208,7 @@ function connectLogs() {
     domain.className = 'domain';
     domain.textContent = e.domain || '-';
     const method = document.createElement('span');
-    method.className = 'method';
+    method.className = 'method chip';
     method.textContent = e.method;
     const status = document.createElement('span');
     status.className = 'status ' + (e.status >= 500 ? 'err' : e.status >= 400 ? 'warn' : 'ok');
@@ -148,8 +217,16 @@ function connectLogs() {
     meta.className = 'meta';
     meta.textContent = `${e.durationMs}ms · ${formatBytes(e.read)} / ${formatBytes(e.write)}`;
     li.append(time, domain, method, status, meta);
-    list.prepend(li);
-    while (list.children.length > 100) list.lastChild.remove();
+    list.appendChild(li);
+  }
+}
+
+function connectLogs() {
+  const source = new EventSource('/api/logs');
+  source.onmessage = event => {
+    logEntries.unshift(JSON.parse(event.data));
+    if (logEntries.length > 100) logEntries.pop();
+    renderLogs();
   };
 }
 
@@ -163,27 +240,38 @@ async function post(path, button) {
   } catch (e) {
     showToast(e.message, false);
   } finally {
+    button.disabled = false;
     await loadCertStatus();
     await loadSystemProxy();
   }
 }
 
-$('install-cert').onclick = function () { post('/api/cert/install', this); };
-$('uninstall-cert').onclick = function () {
-  if (confirm('确定从信任库移除 CA？')) post('/api/cert/uninstall', this);
-};
-$('enable-sysproxy').onclick = function () { post('/api/systemproxy/enable', this); };
-$('disable-sysproxy').onclick = function () {
-  if (confirm('关闭系统代理后，浏览器将不再经过 FastGithub。确定关闭？')) {
-    post('/api/systemproxy/disable', this);
-  }
-};
-$('intercept').onclick = function () { post('/api/intercept', this); };
-
 function refreshRuntimeState() {
   loadSystemProxy();
   loadCertStatus();
 }
+
+$('copy-proxy').onclick = async function () {
+  try {
+    await navigator.clipboard.writeText($('proxy-address').textContent);
+    showToast('已复制代理地址');
+  } catch (e) {
+    showToast('复制失败', false);
+  }
+};
+
+$('install-cert').onclick = function () { post('/api/cert/install', this); };
+$('uninstall-cert').onclick = function () {
+  if (confirm('确定从信任库移除 CA？')) post('/api/cert/uninstall', this);
+};
+$('sysproxy-toggle').onclick = function () {
+  if (this.disabled) return;
+  const on = this.getAttribute('aria-checked') === 'true';
+  post(on ? '/api/systemproxy/disable' : '/api/systemproxy/enable', this);
+};
+$('intercept').onclick = function () { post('/api/intercept', this); };
+$('domain-filter').addEventListener('input', renderDomains);
+$('log-filter').addEventListener('input', renderLogs);
 
 loadStatus();
 loadDomains();
@@ -191,6 +279,7 @@ loadFlow();
 loadCertStatus();
 loadSystemProxy();
 connectLogs();
+renderLogs();
 setInterval(loadFlow, 1000);
 setInterval(loadDomains, 5000);
 setInterval(refreshRuntimeState, 5000);

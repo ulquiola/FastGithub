@@ -394,3 +394,29 @@ func TestSystemProxyEndpoints(t *testing.T) {
 		t.Fatalf("status=%d enabled=%v calls=%v body=%s", rec.Code, enabled, calls, rec.Body.String())
 	}
 }
+
+func TestFlowEndpoint(t *testing.T) {
+	s, _, _ := newTestUI(t)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, localRequest(http.MethodGet, "/api/flow"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		TotalRead int64 `json:"totalRead"`
+		Samples   []struct {
+			Time  string `json:"time"`
+			Read  int64  `json:"read"`
+			Write int64  `json:"write"`
+		} `json:"samples"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.TotalRead != 10 || len(body.Samples) == 0 {
+		t.Fatalf("body = %+v", body)
+	}
+	if body.Samples[0].Time == "" {
+		t.Fatalf("sample time empty: %+v", body.Samples[0])
+	}
+}

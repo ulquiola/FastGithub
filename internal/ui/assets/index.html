@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="fastgithub-token" content="{{TOKEN}}">
+  <meta name="color-scheme" content="light dark">
   <title>FastGithub</title>
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -17,44 +18,76 @@
       </div>
     </div>
     <div class="top-meta">
-      <span id="session" class="pill">…</span>
+      <span id="session" class="pill mono">…</span>
       <span class="pill live"><i></i>运行中</span>
     </div>
   </header>
 
   <main>
+    <section class="status-strip" aria-label="运行概览">
+      <div class="status-item">
+        <span class="status-dot"></span>
+        <span class="status-label">代理</span>
+        <code id="top-proxy">…</code>
+        <button id="copy-proxy" class="icon-btn" type="button" title="复制代理地址">复制</button>
+      </div>
+      <div class="status-item">
+        <span class="status-label">证书</span>
+        <span id="top-cert-status" class="badge muted">检测中…</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">系统代理</span>
+        <span id="top-sysproxy-status" class="badge muted">检测中…</span>
+      </div>
+    </section>
+
     <section class="grid">
       <article class="card flow-card">
-        <div class="card-head"><h2>实时流量</h2></div>
+        <div class="card-head">
+          <div class="card-title">
+            <span class="card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>
+            </span>
+            <h2>实时流量</h2>
+          </div>
+          <span id="flow-rate" class="muted mono">↑ 0 B/s · ↓ 0 B/s</span>
+        </div>
         <div class="flow-grid">
           <div><span class="label">累计读取</span><strong id="flow-read">0 B</strong></div>
           <div><span class="label">累计写入</span><strong id="flow-write">0 B</strong></div>
         </div>
-        <p id="flow-rate" class="muted mono">↑ 0 B/s · ↓ 0 B/s</p>
-      </article>
-
-      <article class="card">
-        <div class="card-head"><h2>运行状态</h2></div>
-        <dl id="status-list" class="kv"></dl>
-        <button id="intercept" class="btn ghost">切换拦截</button>
+        <svg id="flow-chart" class="sparkline" viewBox="0 0 320 80" preserveAspectRatio="none" role="img" aria-label="最近 60 秒流量曲线"></svg>
+        <div class="legend"><span class="legend-read">读取</span><span class="legend-write">写入</span></div>
       </article>
 
       <article class="card">
         <div class="card-head">
-          <h2>系统代理</h2>
-          <span id="sysproxy-status" class="badge muted">检测中…</span>
+          <div class="card-title">
+            <span class="card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg>
+            </span>
+            <h2>运行状态</h2>
+          </div>
+          <span class="badge ok">运行中</span>
         </div>
-        <p class="hint">浏览器只有走系统代理，流量才会经过 FastGithub。</p>
-        <div class="actions">
-          <button id="enable-sysproxy" class="btn primary">启用系统代理</button>
-          <button id="disable-sysproxy" class="btn ghost">关闭系统代理</button>
+        <div class="proxy-address"><code id="proxy-address">127.0.0.1:38457</code></div>
+        <div class="stat-grid">
+          <div><span class="label">UI 端口</span><strong id="ui-port">…</strong></div>
+          <div><span class="label">拦截模式</span><strong id="intercept-mode">…</strong></div>
+          <div><span class="label">CA 指纹</span><strong id="ca-fingerprint" class="mono small">…</strong></div>
+          <div><span class="label">DNS 源</span><strong id="dns-sources">…</strong></div>
         </div>
-        <p id="sysproxy-detail" class="hint mono">…</p>
+        <button id="intercept" class="btn ghost small">切换拦截</button>
       </article>
 
       <article class="card cert-card">
         <div class="card-head">
-          <h2>证书信任</h2>
+          <div class="card-title">
+            <span class="card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
+            </span>
+            <h2>证书信任</h2>
+          </div>
           <span id="cert-status" class="badge muted">检测中…</span>
         </div>
         <p class="hint">安装后浏览器与 git 才会信任本地 CA。</p>
@@ -64,12 +97,36 @@
         </div>
         <p class="hint">macOS 非 root 时安装到当前用户钥匙串；系统级请用 sudo CLI。</p>
       </article>
+
+      <article class="card">
+        <div class="card-head">
+          <div class="card-title">
+            <span class="card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg>
+            </span>
+            <h2>系统代理</h2>
+          </div>
+          <span id="sysproxy-status" class="badge muted">检测中…</span>
+        </div>
+        <p class="hint">浏览器只有走系统代理，流量才会经过 FastGithub。</p>
+        <button id="sysproxy-toggle" class="switch" role="switch" aria-checked="false" type="button">
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+          <span id="sysproxy-label">检测中…</span>
+        </button>
+        <p id="sysproxy-detail" class="hint mono">…</p>
+      </article>
     </section>
 
     <section class="split">
       <article class="card">
         <div class="card-head">
-          <h2>域名规则 <span id="domain-count" class="muted"></span></h2>
+          <div class="card-title">
+            <span class="card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+            </span>
+            <h2>域名规则 <span id="domain-count" class="muted"></span></h2>
+          </div>
+          <input id="domain-filter" class="filter" placeholder="过滤域名…" autocomplete="off" spellcheck="false">
         </div>
         <div class="table-wrap">
           <table>
@@ -81,8 +138,13 @@
 
       <article class="card">
         <div class="card-head">
-          <h2>请求日志</h2>
-          <span class="muted">最近 1000 条</span>
+          <div class="card-title">
+            <span class="card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
+            </span>
+            <h2>请求日志</h2>
+          </div>
+          <input id="log-filter" class="filter" placeholder="过滤域名/方法/状态…" autocomplete="off" spellcheck="false">
         </div>
         <ul id="logs" class="logs"></ul>
       </article>

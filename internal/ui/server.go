@@ -70,6 +70,7 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("/style.css", staticAsset("assets/style.css", "text/css; charset=utf-8"))
 	s.mux.HandleFunc("/api/status", s.status)
 	s.mux.HandleFunc("/api/domains", s.domains)
+	s.mux.HandleFunc("/api/flow", s.flow)
 	s.mux.HandleFunc("/api/logs", s.logs)
 	s.mux.HandleFunc("/api/cert", s.cert)
 	s.mux.HandleFunc("/api/cert/status", s.certStatus)
@@ -357,6 +358,44 @@ func (s *Server) intercept(w http.ResponseWriter, r *http.Request) {
 func (s *Server) authorized(r *http.Request) bool {
 	token := r.Header.Get("X-FastGithub-Token")
 	return token != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.opts.Token)) == 1
+}
+
+type flowSample struct {
+	Time  string `json:"time"`
+	Read  int64  `json:"read"`
+	Write int64  `json:"write"`
+}
+
+type flowResponse struct {
+	TotalRead  int64        `json:"totalRead"`
+	TotalWrite int64        `json:"totalWrite"`
+	ReadRate   int64        `json:"readRate"`
+	WriteRate  int64        `json:"writeRate"`
+	Samples    []flowSample `json:"samples"`
+}
+
+func (s *Server) flow(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
+	resp := flowResponse{Samples: []flowSample{}}
+	if s.opts.Tracker == nil {
+		writeJSON(w, resp)
+		return
+	}
+	snapshot := s.opts.Tracker.Snapshot()
+	resp.TotalRead = snapshot.TotalRead
+	resp.TotalWrite = snapshot.TotalWrite
+	resp.ReadRate = snapshot.ReadRate
+	resp.WriteRate = snapshot.WriteRate
+	for _, sample := range snapshot.Samples {
+		resp.Samples = append(resp.Samples, flowSample{
+			Time:  sample.Time.Format("15:04:05"),
+			Read:  sample.ReadRate,
+			Write: sample.WriteRate,
+		})
+	}
+	writeJSON(w, resp)
 }
 
 // FlowStatistics 返回兼容原版的 PascalCase 流量字段。
