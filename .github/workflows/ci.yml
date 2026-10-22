@@ -1,7 +1,12 @@
 name: ci
 
+permissions:
+  contents: write
+
 on:
   push:
+    branches-ignore:
+      - 'ci-log-*'
   pull_request:
 
 jobs:
@@ -29,6 +34,13 @@ jobs:
               tail -200 go-test.log
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
+            branch="ci-log-${GITHUB_RUN_ID}-${{ matrix.os }}"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git checkout -B "$branch"
+            git add -f go-test.log
+            git commit -m "ci: test log ${GITHUB_RUN_ID} ${{ matrix.os }}"
+            git push origin "HEAD:$branch"
           fi
           exit "$status"
       - name: go vet
