@@ -17,7 +17,20 @@ jobs:
         with:
           go-version: "1.22"
       - name: go test
-        run: go test ./...
+        shell: bash
+        run: |
+          set +e
+          go test ./... 2>&1 | tee go-test.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            {
+              echo "## go test failed on ${{ matrix.os }}"
+              echo '```'
+              tail -200 go-test.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
       - name: go vet
         run: go vet ./...
       - name: gofmt
