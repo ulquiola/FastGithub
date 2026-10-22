@@ -58,4 +58,20 @@ for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 d
   fi
   archive "$name"
 done
+
+# macOS 菜单栏应用只能在 macOS 上构建；把宿主架构的 .app 放进对应发布包。
+if [ "$(uname -s)" = "Darwin" ]; then
+  echo "release macOS app ($VERSION)"
+  VERSION="$VERSION" ./scripts/build-macos-app.sh
+  if [ -d dist/FastGithub.app ]; then
+    host_arch="$(go env GOARCH)"
+    host_dir="dist/fastgithub-darwin-$host_arch"
+    if [ -d "$host_dir" ]; then
+      cp -R dist/FastGithub.app "$host_dir/FastGithub.app"
+      archive "fastgithub-darwin-$host_arch"
+    fi
+    (cd dist && zip -qr "FastGithub-macos-$host_arch-app.zip" "FastGithub.app")
+  fi
+fi
+
 echo "发布产物已生成到 dist/"

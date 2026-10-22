@@ -119,7 +119,7 @@ $ make test
 $ make ci                 # 测试 + vet + gofmt + 六目标交叉编译
 $ make bench              # 配置匹配 / DNS 解析 / MITM h1 vs h2
 $ make fetch-windivert    # 下载并校验 WinDivert 2.2.2 到 windivert/
-$ VERSION=v0.4.1 make release
+$ VERSION=v0.6.0 make release
 ```
 
 产物在 `dist/fastgithub-<os>-<arch>.zip`，含可执行文件、`fastgithub.toml`、`conf.d/`、README 与 LICENSE；存在 `windivert/` 时只随 `windows/amd64` 打包。Windows 上没有 make 可直接 `bash scripts/ci.sh`。
