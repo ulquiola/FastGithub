@@ -81,6 +81,21 @@ http2 = false   # 全部回落到 HTTP/1.1，用于排查个别站点在 h2 下�
 
 `http://127.0.0.1:38470/` 提供状态、域名命中、实时日志（SSE）、证书安装/卸载、CA 下载、系统代理开关（macOS）与“域名诊断”。域名诊断会对输入的主机重新做一次 DNS 解析，并对每个候选 IP 并发探测 TCP 443，显示 IP、握手延迟和可用性；接口为 `GET /api/diagnose?host=github.com`，只读、仅回环。**会修改状态**的接口需要启动目录下 `ui.token` 里的令牌（文件权限 0600）。
 
+## macOS 菜单栏应用
+
+```console
+$ make macapp-install
+$ open ~/Applications/FastGithub.app
+```
+
+- 无控制台窗口、无 Dock 图标（`LSUIElement`），菜单栏常驻；
+- 菜单提供：代理状态、打开 Web 界面、系统代理开关、安装/卸载 CA、开机启动、退出；
+- 数据在 `~/Library/Application Support/FastGithub`，升级或重建 `.app` 不会更换 CA 和 `ui.token`；
+- 首次使用请在菜单里点“安装 CA”；旧 CLI 的 CA 可在钥匙串中手动删除；
+- 实测物理内存约 13MB（Activity Monitor 的“内存”）；RSS 约 35MB 是因为包含共享库，不代表实际占用。
+
+菜单栏二进制用 cgo/AppKit 构建，因此只在 macOS 上编译；CLI `fastgithub` 仍保持 `CGO_ENABLED=0` 和六目标交叉编译。
+
 ## 透明拦截的前置条件（Windows）
 
 WinDivert 不随包内嵌，需要把 `WinDivert.dll` 与 `WinDivert64.sys` 放进 `intercept.driver_dir`、可执行文件同目录或 `windivert/`。DLL 缺失、非管理员或 `WinDivertOpen` 失败时只告警，显式代理继续可用。WinDivert 2.2.2 只有 x86/x64 驱动，`windows/arm64` 包不含它；再分发请保留其 LICENSE（LGPLv3/GPLv2）。

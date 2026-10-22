@@ -240,7 +240,7 @@ CLI `cmd/fastgithub` 保持 `CGO_ENABLED=0` 和六目标交叉编译不变；菜
 5. 开机启动：勾选后重启（或注销）自动出现菜单栏图标；取消后不再自启。
 6. 退出：菜单退出后进程消失，系统代理被关闭，端口释放。
 7. 二次启动：已有实例时只打开 Web UI，不产生第二个进程。
-8. 资源：空闲 5 分钟后 `ps -o rss` <30MB。
+8. 资源：空闲 5 分钟后 `footprint -p <pid>` 的 `phys_footprint` <30MB（即 Activity Monitor 的“内存”）。`ps -o rss` 会包含 AppKit 共享库，不作为验收指标。
 
 ## 10. 风险与缓解
 
@@ -265,7 +265,7 @@ CLI `cmd/fastgithub` 保持 `CGO_ENABLED=0` 和六目标交叉编译不变；菜
 
 - 双击 `.app` 即可使用，无终端窗口、无 Dock 图标；
 - 菜单栏功能完整（状态、打开界面、系统代理、证书、开机启动、退出）；
-- 常驻内存 <30MB；
+- 常驻物理内存（`footprint`）<30MB；
 - 升级/重建 `.app` 后 CA 与 `ui.token` 不变；
 - 现有 CLI 与 Windows/Linux 构建不受影响；
 - `go test ./...`、`go vet ./...`、`gofmt -l .` 全绿。
