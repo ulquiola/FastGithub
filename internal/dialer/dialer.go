@@ -71,10 +71,32 @@ func (d *Dialer) DialTLSH2(ctx context.Context, t Target) (*tls.Conn, error) {
 }
 
 func (d *Dialer) dialTLS(ctx context.Context, t Target, protos []string) (*tls.Conn, error) {
-	conn, ip, err := d.dialFirst(ctx, t)
+	ips, err := d.ips(ctx, t)
 	if err != nil {
 		return nil, err
 	}
+	timeout := d.timeoutFor(t)
+	var errs []error
+	for _, ip := range ips {
+		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+		conn, err := d.dialer.DialContext(attemptCtx, "tcp", net.JoinHostPort(ip.String(), strconv.Itoa(t.Port)))
+		cancel()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", ip, err))
+			continue
+		}
+		tlsConn, err := d.handshakeTLS(ctx, t, conn, ip, protos)
+		if err != nil {
+			conn.Close()
+			errs = append(errs, fmt.Errorf("%s: %w", ip, err))
+			continue
+		}
+		return tlsConn, nil
+	}
+	return nil, errors.Join(errs...)
+}
+
+func (d *Dialer) handshakeTLS(ctx context.Context, t Target, conn net.Conn, ip net.IP, protos []string) (*tls.Conn, error) {
 	// 没有域名规则时（例如 Destination 改写后的镜像主机）默认发送真实主机名。
 	sni := t.Host
 	ignoreName := false
@@ -94,7 +116,6 @@ func (d *Dialer) dialTLS(ctx context.Context, t Target, protos []string) (*tls.C
 	handshakeCtx, cancel := context.WithTimeout(ctx, d.timeoutFor(t))
 	defer cancel()
 	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
-		conn.Close()
 		return nil, err
 	}
 	return tlsConn, nil
@@ -130,6 +151,11 @@ func (d *Dialer) timeoutFor(t Target) time.Duration {
 	return d.connectTimeout
 }
 
+// sourceResolver 是可选能力：按域名规则指定 DoH 源。
+type sourceResolver interface {
+	LookupSource(ctx context.Context, domain, source string) ([]net.IP, error)
+}
+
 func (d *Dialer) ips(ctx context.Context, t Target) ([]net.IP, error) {
 	var out []net.IP
 	if t.Domain != nil && t.Domain.IP != "" {
@@ -140,7 +166,19 @@ func (d *Dialer) ips(ctx context.Context, t Target) ([]net.IP, error) {
 	if ip := net.ParseIP(t.Host); ip != nil {
 		out = append(out, ip)
 	} else {
-		ips, err := d.resolver.Lookup(ctx, t.Host)
+		var (
+			ips []net.IP
+			err error
+		)
+		if t.Domain != nil && t.Domain.DNS != "" {
+			if sr, ok := d.resolver.(sourceResolver); ok {
+				ips, err = sr.LookupSource(ctx, t.Host, t.Domain.DNS)
+			} else {
+				ips, err = d.resolver.Lookup(ctx, t.Host)
+			}
+		} else {
+			ips, err = d.resolver.Lookup(ctx, t.Host)
+		}
 		if err != nil && len(out) == 0 {
 			return nil, err
 		}

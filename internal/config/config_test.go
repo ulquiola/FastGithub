@@ -48,6 +48,30 @@ func TestDecodeHTTP2Override(t *testing.T) {
 	}
 }
 
+func TestDecodeDomainDNS(t *testing.T) {
+	c := Default()
+	root, err := Parse([]byte("[domains.\"linux.do\"]\ndns = \"https://uuu.ddd.oaifree.com/query-dns\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Decode(root, c); err != nil {
+		t.Fatal(err)
+	}
+	got := c.Domains["linux.do"]
+	if got == nil || got.DNS != "https://uuu.ddd.oaifree.com/query-dns" {
+		t.Fatalf("domain = %+v", got)
+	}
+}
+
+func TestValidateDomainDNS(t *testing.T) {
+	c := Default()
+	c.Domains = map[string]*Domain{"linux.do": {DNS: "http://insecure/query-dns"}}
+	err := c.Validate()
+	if err == nil || !strings.Contains(err.Error(), "dns 必须是 https URL") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestDecodeIntoConfig(t *testing.T) {
 	c := Default()
 	root, err := Parse([]byte(`
