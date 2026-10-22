@@ -22,6 +22,7 @@ CGO_ENABLED=1 GOOS=darwin GOARCH="$(go env GOARCH)" \
 
 cp fastgithub.toml "$APP/Contents/Resources/"
 cp -R conf.d "$APP/Contents/Resources/"
+cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -33,6 +34,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>FastGithub</string>
   <key>CFBundleExecutable</key><string>FastGithub</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSUIElement</key><true/>
