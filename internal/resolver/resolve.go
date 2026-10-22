@@ -34,6 +34,8 @@ type Resolver struct {
 	health   *sourceHealth
 	racer    *racer
 	now      func() time.Time
+	// queryFn 仅供测试注入；为空时走真实的 DoH/明文 DNS。
+	queryFn func(context.Context, string) ([]net.IP, uint32, error)
 }
 
 // New 用 dns.* 配置构造解析器。
@@ -87,6 +89,25 @@ func (r *Resolver) Lookup(ctx context.Context, domain string) ([]net.IP, error) 
 }
 
 func (r *Resolver) resolve(ctx context.Context, domain string) ([]net.IP, error) {
+	ips, ttl, err := r.query(ctx, domain)
+	if err != nil {
+		// 调用方取消或总预算耗尽时不写负缓存，避免把一次超时放大成持续故障。
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return nil, err
+		}
+		r.cache.putNegative(domain, err, negativeTTL(err), r.now())
+		return nil, err
+	}
+	ips = r.racer.Sort(ctx, ips)
+	r.cache.putPositive(domain, ips, clampTTL(ttl), r.now())
+	return ips, nil
+}
+
+// query 执行 A/AAAA 查询并合并去重，不读写缓存。
+func (r *Resolver) query(ctx context.Context, domain string) ([]net.IP, uint32, error) {
+	if r.queryFn != nil {
+		return r.queryFn(ctx, domain)
+	}
 	// dns.timeout 是整次解析的总预算，避免源越多耗时线性增长。
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
@@ -125,16 +146,12 @@ func (r *Resolver) resolve(ctx context.Context, domain string) ([]net.IP, error)
 		if err == nil {
 			err = fmt.Errorf("%s 没有 A/AAAA 记录", domain)
 		}
-		// 调用方取消或总预算耗尽时不写负缓存，避免把一次超时放大成持续故障。
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, errors.Join(err, ctxErr)
+			err = errors.Join(err, ctxErr)
 		}
-		r.cache.putNegative(domain, err, negativeTTL(err), r.now())
-		return nil, err
+		return nil, 0, err
 	}
-	ips = r.racer.Sort(ctx, ips)
-	r.cache.putPositive(domain, ips, clampTTL(ttl), r.now())
-	return ips, nil
+	return ips, ttl, nil
 }
 
 func (r *Resolver) lookupType(ctx context.Context, domain string, qtype uint16) ([]net.IP, uint32, error) {
