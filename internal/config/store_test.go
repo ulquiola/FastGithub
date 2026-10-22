@@ -141,3 +141,21 @@ func TestStoreStats(t *testing.T) {
 		t.Fatalf("stats = %+v", stats)
 	}
 }
+
+func TestStoreFallbackIPs(t *testing.T) {
+	c := Default()
+	c.FallbackIPs = map[string][]string{
+		"GitHub.com.": {"140.82.113.3", "140.82.114.3"},
+	}
+	st, err := NewStore(c)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	ips := st.FallbackIPs("github.com")
+	if len(ips) != 2 || ips[0].String() != "140.82.113.3" || ips[1].String() != "140.82.114.3" {
+		t.Fatalf("FallbackIPs = %v", ips)
+	}
+	if ips := st.FallbackIPs("api.github.com"); ips != nil {
+		t.Fatalf("未配置的域名应返回 nil，got %v", ips)
+	}
+}

@@ -1,7 +1,9 @@
 package config
 
 import (
+	"net"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -17,6 +19,7 @@ type Store struct {
 	byKey    map[*Pattern]*Domain
 	cache    map[string]*Domain
 	hits     map[*Pattern]int64
+	fallback map[string][]net.IP
 }
 
 // DomainStat 是单条域名规则的命中统计。
@@ -44,13 +47,37 @@ func NewStore(cfg *Config) (*Store, error) {
 	sort.SliceStable(patterns, func(i, j int) bool {
 		return patterns[i].Compare(patterns[j]) < 0
 	})
+	fallback := make(map[string][]net.IP, len(cfg.FallbackIPs))
+	for name, raws := range cfg.FallbackIPs {
+		ips := make([]net.IP, 0, len(raws))
+		for _, raw := range raws {
+			if ip := net.ParseIP(raw); ip != nil {
+				ips = append(ips, ip)
+			}
+		}
+		fallback[normalizeFallbackHost(name)] = ips
+	}
 	return &Store{
 		cfg:      cfg,
 		patterns: patterns,
 		byKey:    byKey,
 		cache:    map[string]*Domain{},
 		hits:     map[*Pattern]int64{},
+		fallback: fallback,
 	}, nil
+}
+
+// FallbackIPs 返回该域名的备用 IP；键为精确域名，未配置返回 nil。
+// 返回的切片只读，调用方不应修改。
+func (s *Store) FallbackIPs(host string) []net.IP {
+	if len(s.fallback) == 0 {
+		return nil
+	}
+	return s.fallback[normalizeFallbackHost(host)]
+}
+
+func normalizeFallbackHost(host string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 }
 
 // Lookup 返回命中的域名规则；未命中返回 nil,false。

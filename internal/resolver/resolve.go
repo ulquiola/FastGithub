@@ -54,12 +54,16 @@ func New(cfg config.DNS) *Resolver {
 	}
 	r.racer = &racer{
 		timeout: raceTimeout,
-		port:    racePort,
 		latency: r.latency,
 		dial:    (&net.Dialer{}).DialContext,
 		now:     func() time.Time { return r.now() },
 	}
 	return r
+}
+
+// Sort 对候选 IP 做 TCP 竞速，供 dialer 合并 DNS 答案与备用 IP 后排序。
+func (r *Resolver) Sort(ctx context.Context, port string, ips []net.IP) []net.IP {
+	return r.racer.Sort(ctx, port, ips)
 }
 
 // Lookup 返回按 TCP 时延排序的 A/AAAA 地址；负缓存命中时返回缓存的错误。
@@ -96,7 +100,7 @@ func (r *Resolver) resolve(ctx context.Context, domain string) ([]net.IP, error)
 		r.cache.putNegative(domain, err, negativeTTL(err), r.now())
 		return nil, err
 	}
-	ips = r.racer.Sort(ctx, ips)
+	ips = r.racer.Sort(ctx, racePort, ips)
 	r.cache.putPositive(domain, ips, clampTTL(ttl), r.now())
 	return ips, nil
 }

@@ -13,6 +13,7 @@ import (
 
 	"fastgithub-go/internal/certs"
 	"fastgithub-go/internal/config"
+	"fastgithub-go/internal/resolver"
 )
 
 type fakeResolver struct {
@@ -238,4 +239,131 @@ func TestTimeoutFor(t *testing.T) {
 	if got := d.timeoutFor(Target{Domain: conf}); got != 3*time.Second {
 		t.Fatalf("域名超时 = %v", got)
 	}
+}
+
+func fallbackStore(t *testing.T, domain string, fallbacks map[string][]string) *config.Store {
+	t.Helper()
+	cfg := config.Default()
+	cfg.Domains = map[string]*config.Domain{domain: {}}
+	cfg.FallbackIPs = fallbacks
+	store, err := config.NewStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+func ipStrings(ips []net.IP) []string {
+	out := make([]string, len(ips))
+	for i, ip := range ips {
+		out[i] = ip.String()
+	}
+	return out
+}
+
+func TestIPsIncludeFallbackIPs(t *testing.T) {
+	store := fallbackStore(t, "example.com", map[string][]string{"example.com": {"9.9.9.9"}})
+	d := New(store, fakeResolver{ips: []net.IP{net.ParseIP("1.1.1.1")}}, nil)
+	ips, err := d.ips(context.Background(), Target{Host: "example.com", Domain: &config.Domain{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"1.1.1.1", "9.9.9.9"}
+	if got := ipStrings(ips); len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("ips = %v，期望 %v", got, want)
+	}
+}
+
+func TestIPsSkipFallbackWithStaticIP(t *testing.T) {
+	store := fallbackStore(t, "example.com", map[string][]string{"example.com": {"9.9.9.9"}})
+	conf := &config.Domain{IP: "3.3.3.3"}
+	d := New(store, fakeResolver{ips: []net.IP{net.ParseIP("1.1.1.1")}}, nil)
+	ips, err := d.ips(context.Background(), Target{Host: "example.com", Domain: conf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"3.3.3.3", "1.1.1.1"}
+	if got := ipStrings(ips); len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("ips = %v，期望 %v", got, want)
+	}
+}
+
+func TestIPsUseFallbackWhenResolverFails(t *testing.T) {
+	store := fallbackStore(t, "example.com", map[string][]string{"example.com": {"9.9.9.9"}})
+	d := New(store, fakeResolver{err: errors.New("boom")}, nil)
+	ips, err := d.ips(context.Background(), Target{Host: "example.com", Domain: &config.Domain{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ipStrings(ips); len(got) != 1 || got[0] != "9.9.9.9" {
+		t.Fatalf("ips = %v，期望 [9.9.9.9]", got)
+	}
+}
+
+type recordingRacer struct {
+	fakeResolver
+	port  string
+	order []net.IP
+}
+
+func (r *recordingRacer) Sort(_ context.Context, port string, _ []net.IP) []net.IP {
+	r.port = port
+	return r.order
+}
+
+func TestDialTCPUsesSortedCandidates(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	store := fallbackStore(t, "example.com", map[string][]string{"example.com": {"127.0.0.1"}})
+	res := &recordingRacer{
+		fakeResolver: fakeResolver{ips: []net.IP{net.ParseIP("192.0.2.1")}},
+		order:        []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("192.0.2.1")},
+	}
+	d := New(store, res, nil)
+	port := portOf(t, ln.Addr().String())
+	conn, err := d.DialTCP(context.Background(), Target{Host: "example.com", Port: port, Domain: &config.Domain{}})
+	if err != nil {
+		t.Fatalf("DialTCP: %v", err)
+	}
+	conn.Close()
+	if res.port != strconv.Itoa(port) {
+		t.Fatalf("竞速端口 = %q，期望 %d", res.port, port)
+	}
+}
+
+type realRacerResolver struct {
+	ips   []net.IP
+	racer *resolver.Resolver
+}
+
+func (r realRacerResolver) Lookup(context.Context, string) ([]net.IP, error) { return r.ips, nil }
+
+func (r realRacerResolver) Sort(ctx context.Context, port string, ips []net.IP) []net.IP {
+	return r.racer.Sort(ctx, port, ips)
+}
+
+func TestDialTCPUsesRealRacerFallback(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	store := fallbackStore(t, "example.com", map[string][]string{"example.com": {"127.0.0.1"}})
+	res := realRacerResolver{
+		ips:   []net.IP{net.ParseIP("127.0.0.2")},
+		racer: resolver.New(config.DNS{}),
+	}
+	d := New(store, res, nil)
+	conn, err := d.DialTCP(context.Background(), Target{
+		Host: "example.com", Port: portOf(t, ln.Addr().String()), Domain: &config.Domain{},
+	})
+	if err != nil {
+		t.Fatalf("DNS 答案不可达时应改用备用 IP: %v", err)
+	}
+	conn.Close()
 }

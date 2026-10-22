@@ -33,6 +33,8 @@ func newTestServer(t *testing.T, domains map[string]*config.Domain) (*Server, *c
 	t.Helper()
 	cfg := config.Default()
 	cfg.Domains = domains
+	// 测试用假解析器，隔离内置备用 IP，避免真实网络参与。
+	cfg.FallbackIPs = nil
 	store, err := config.NewStore(cfg)
 	if err != nil {
 		t.Fatal(err)

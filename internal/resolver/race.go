@@ -11,7 +11,6 @@ import (
 // racer 对候选 IP 并发拨号并按握手耗时排序；失败项排在末尾。
 type racer struct {
 	timeout time.Duration
-	port    string
 	latency *latencyCache
 	dial    func(context.Context, string, string) (net.Conn, error)
 	now     func() time.Time
@@ -19,7 +18,8 @@ type racer struct {
 
 const maxRaceCandidates = 32
 
-func (r *racer) Sort(ctx context.Context, ips []net.IP) []net.IP {
+// Sort 按 port 对候选 IP 做 TCP 竞速；时延缓存按 ip:port 区分。
+func (r *racer) Sort(ctx context.Context, port string, ips []net.IP) []net.IP {
 	now := r.now()
 	type probe struct {
 		idx     int
@@ -36,32 +36,33 @@ func (r *racer) Sort(ctx context.Context, ips []net.IP) []net.IP {
 	var wg sync.WaitGroup
 	for i := 0; i < probeCount; i++ {
 		ip := ips[i]
+		key := net.JoinHostPort(ip.String(), port)
 		probes[i] = probe{idx: i, ip: ip}
-		if latency, ok, found := r.latency.get(ip.String(), now); found {
+		if latency, ok, found := r.latency.get(key, now); found {
 			probes[i].latency, probes[i].ok = latency, ok
 			continue
 		}
 		wg.Add(1)
-		go func(p *probe) {
+		go func(p *probe, key string) {
 			defer wg.Done()
 			start := r.now()
 			attemptCtx, cancel := context.WithTimeout(ctx, r.timeout)
-			conn, err := r.dial(attemptCtx, "tcp", net.JoinHostPort(p.ip.String(), r.port))
+			conn, err := r.dial(attemptCtx, "tcp", key)
 			cancel()
 			if err != nil {
 				if conn != nil {
 					conn.Close()
 				}
 				if ctx.Err() == nil {
-					r.latency.put(p.ip.String(), 0, false, now)
+					r.latency.put(key, 0, false, now)
 				}
 				return
 			}
 			conn.Close()
 			p.ok = true
 			p.latency = r.now().Sub(start)
-			r.latency.put(p.ip.String(), p.latency, true, now)
-		}(&probes[i])
+			r.latency.put(key, p.latency, true, now)
+		}(&probes[i], key)
 	}
 	wg.Wait()
 

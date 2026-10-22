@@ -19,7 +19,6 @@ import (
 func stubRacer(r *Resolver) {
 	r.racer = &racer{
 		timeout: 100 * time.Millisecond,
-		port:    racePort,
 		latency: r.latency,
 		dial:    func(context.Context, string, string) (net.Conn, error) { return nopConn{}, nil },
 		now:     func() time.Time { return r.now() },

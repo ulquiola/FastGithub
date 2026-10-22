@@ -12,11 +12,12 @@ import (
 
 // Config 对应 fastgithub.toml 的根表。
 type Config struct {
-	Server    Server             `toml:"server"`
-	DNS       DNS                `toml:"dns"`
-	Intercept Intercept          `toml:"intercept"`
-	Log       Log                `toml:"log"`
-	Domains   map[string]*Domain `toml:"domains"`
+	Server      Server              `toml:"server"`
+	DNS         DNS                 `toml:"dns"`
+	Intercept   Intercept           `toml:"intercept"`
+	Log         Log                 `toml:"log"`
+	Domains     map[string]*Domain  `toml:"domains"`
+	FallbackIPs map[string][]string `toml:"fallback_ips"`
 }
 
 // Server 是监听相关配置。
@@ -107,6 +108,20 @@ func Default() *Config {
 		Intercept: Intercept{Mode: "auto"},
 		Log:       Log{Level: "info", File: "logs/fastgithub.log"},
 		Domains:   map[string]*Domain{},
+		// DNS 只返回单个区域 IP 时，答案不可达会让整个域名 502。
+		// 这些备用 IP 与 DNS 答案一起竞速，只在 TCP 可达时才会被选用。
+		FallbackIPs: map[string][]string{
+			"github.com": {
+				"140.82.113.3", "140.82.114.3", "140.82.116.3",
+				"20.27.177.113", "20.200.245.247",
+			},
+			"api.github.com": {
+				"140.82.113.6", "140.82.114.6", "140.82.116.6",
+			},
+			"codeload.github.com": {
+				"140.82.113.9", "140.82.114.9", "140.82.116.9",
+			},
+		},
 	}
 }
 
@@ -223,6 +238,43 @@ func (c *Config) Validate() error {
 			}
 			if d.Response.Content != "" && d.Response.ContentType == "" {
 				add("域名规则 %q 有 response.content 时必须给出 response.content_type", name)
+			}
+		}
+	}
+
+	fallbackNames := make([]string, 0, len(c.FallbackIPs))
+	for name := range c.FallbackIPs {
+		fallbackNames = append(fallbackNames, name)
+	}
+	sort.Strings(fallbackNames)
+	seenFallback := make(map[string]string, len(c.FallbackIPs))
+	for _, name := range fallbackNames {
+		if name == "" {
+			add("fallback_ips 的域名不能为空")
+			continue
+		}
+		key := normalizeFallbackHost(name)
+		if first, ok := seenFallback[key]; ok {
+			add("fallback_ips 的域名 %q 与 %q 规范化后重复", first, name)
+		} else {
+			seenFallback[key] = name
+		}
+		if strings.Contains(name, "*") {
+			add("fallback_ips.%s 只支持精确域名", name)
+			continue
+		}
+		if _, err := NewPattern(name); err != nil {
+			add("fallback_ips.%s: %v", name, err)
+			continue
+		}
+		ips := c.FallbackIPs[name]
+		if len(ips) == 0 {
+			add("fallback_ips.%s 不能为空", name)
+			continue
+		}
+		for i, raw := range ips {
+			if net.ParseIP(raw) == nil {
+				add("fallback_ips.%s[%d] 无法解析: %s", name, i, raw)
 			}
 		}
 	}

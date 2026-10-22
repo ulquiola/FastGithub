@@ -20,6 +20,11 @@ type Resolver interface {
 	Lookup(ctx context.Context, domain string) ([]net.IP, error)
 }
 
+// racer 是解析器的可选能力：实现后 dialer 会在拨号前对候选 IP 竞速。
+type racer interface {
+	Sort(ctx context.Context, port string, ips []net.IP) []net.IP
+}
+
 // Target 是一次上游连接的目标。
 type Target struct {
 	Host   string
@@ -105,6 +110,9 @@ func (d *Dialer) dialFirst(ctx context.Context, t Target) (net.Conn, net.IP, err
 	if err != nil {
 		return nil, nil, err
 	}
+	if r, ok := d.resolver.(racer); ok {
+		ips = r.Sort(ctx, strconv.Itoa(t.Port), ips)
+	}
 	timeout := d.timeoutFor(t)
 	var errs []error
 	for _, ip := range ips {
@@ -137,20 +145,30 @@ func (d *Dialer) ips(ctx context.Context, t Target) ([]net.IP, error) {
 			out = append(out, ip)
 		}
 	}
+	fallback := d.fallbackIPs(t)
 	if ip := net.ParseIP(t.Host); ip != nil {
 		out = append(out, ip)
-	} else {
+	} else if d.resolver != nil {
 		ips, err := d.resolver.Lookup(ctx, t.Host)
-		if err != nil && len(out) == 0 {
+		if err != nil && len(out) == 0 && len(fallback) == 0 {
 			return nil, err
 		}
 		out = append(out, ips...)
 	}
+	out = append(out, fallback...)
 	out = dedupIPs(out)
 	if len(out) == 0 {
 		return nil, fmt.Errorf("没有可用 IP: %s", t.Host)
 	}
 	return out, nil
+}
+
+// fallbackIPs 返回配置的备用 IP；显式 ip 规则优先，不参与备用列表。
+func (d *Dialer) fallbackIPs(t Target) []net.IP {
+	if d.store == nil || (t.Domain != nil && t.Domain.IP != "") {
+		return nil
+	}
+	return d.store.FallbackIPs(t.Host)
 }
 
 func dedupIPs(ips []net.IP) []net.IP {
