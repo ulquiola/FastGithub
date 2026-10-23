@@ -61,6 +61,14 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Scheme != "" {
 		scheme = r.URL.Scheme
 	}
+	// WebKit 通过 HTTP 代理发 WebSocket 时请求行是绝对 URI（ws://host/path）。
+	// 归一化成 http/https，否则 http.Transport 会报 unsupported protocol scheme。
+	switch strings.ToLower(scheme) {
+	case "ws":
+		scheme = "http"
+	case "wss":
+		scheme = "https"
+	}
 	destination := ""
 	if matched {
 		destination = domain.Destination
