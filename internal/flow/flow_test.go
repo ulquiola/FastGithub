@@ -105,3 +105,39 @@ func TestLoggerWritesFileAndTracker(t *testing.T) {
 		t.Fatalf("ring = %+v", got)
 	}
 }
+
+// TestLoggerWriteAppendsDiagnostics 锁定诊断落盘：标准库 log 通过 io.Writer 把
+// “透明拦截未启用”这类信息写进同一个日志文件，与请求日志共存。
+func TestLoggerWriteAppendsDiagnostics(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fastgithub.log")
+	l, err := NewLogger(NewRing(4), NewTracker(4), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Write([]byte("透明拦截未启用: 需要管理员权限\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "透明拦截未启用") {
+		t.Fatalf("日志文件 = %q，诊断信息没有落盘", data)
+	}
+}
+
+// TestLoggerWriteWithoutFileIsNoop 保证未配置文件时仍满足 io.Writer（服务模式之外
+// 的调用方不会被写失败打断）。
+func TestLoggerWriteWithoutFileIsNoop(t *testing.T) {
+	l, err := NewLogger(NewRing(4), NewTracker(4), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := l.Write([]byte("hello"))
+	if err != nil || n != len("hello") {
+		t.Fatalf("Write = %d, %v，期望 %d, nil", n, err, len("hello"))
+	}
+}

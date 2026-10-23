@@ -11,6 +11,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"fastgithub-go/internal/certs"
 	"fastgithub-go/internal/config"
@@ -33,16 +35,33 @@ type Options struct {
 	InstallCert   func(string) error
 	UninstallCert func(string) error
 	CertStatus    func(string) (certs.TrustStatus, error)
+	// CertStatusTTL 是证书状态缓存有效期，0 表示用 defaultCertStatusTTL。
+	// Windows 的证书探测会拉起 certutil 进程，UI 每 5 秒轮询一次就是每 5 秒一个
+	// 子进程；缓存后只有过期或安装/卸载后才真正探测。
+	CertStatusTTL time.Duration
 
 	SystemProxyStatus  func(int) (sysproxy.Status, error)
 	EnableSystemProxy  func(int) error
 	DisableSystemProxy func(int) error
 }
 
+// defaultCertStatusTTL 是证书状态的默认缓存时长：UI 与外部工具装证书都远慢于
+// 这个量级，30 秒足以把 certutil 进程数从“每 5 秒一个”降到“每 30 秒一个”。
+const defaultCertStatusTTL = 30 * time.Second
+
 // Server 提供内嵌页面、REST、SSE 与兼容端点。
 type Server struct {
 	opts Options
 	mux  *http.ServeMux
+
+	certMu       sync.Mutex
+	certCached   certs.TrustStatus
+	certErr      error
+	certCachedAt time.Time
+
+	// now 与 ttl 在测试中可以替换，避免用真实时间睡眠。
+	now func() time.Time
+	ttl time.Duration
 }
 
 func New(opts Options) *Server {
@@ -64,7 +83,10 @@ func New(opts Options) *Server {
 	if opts.DisableSystemProxy == nil {
 		opts.DisableSystemProxy = sysproxy.Disable
 	}
-	s := &Server{opts: opts, mux: http.NewServeMux()}
+	s := &Server{opts: opts, mux: http.NewServeMux(), now: time.Now, ttl: opts.CertStatusTTL}
+	if s.ttl <= 0 {
+		s.ttl = defaultCertStatusTTL
+	}
 	s.mux.HandleFunc("/", s.index)
 	s.mux.HandleFunc("/app.js", staticAsset("assets/app.js", "application/javascript; charset=utf-8"))
 	s.mux.HandleFunc("/style.css", staticAsset("assets/style.css", "text/css; charset=utf-8"))
@@ -259,12 +281,32 @@ func (s *Server) certStatus(w http.ResponseWriter, r *http.Request) {
 	if !requireGET(w, r) {
 		return
 	}
-	status, err := s.opts.CertStatus(s.opts.CA.CertPath())
+	status, err := s.trustStatus()
 	if err != nil {
 		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, map[string]any{"installed": status.Installed, "scope": status.Scope})
+}
+
+// trustStatus 返回（可能带缓存的）证书信任状态。缓存同时保存错误，避免探测失败
+// 时每个轮询都重试一次子进程。
+func (s *Server) trustStatus() (certs.TrustStatus, error) {
+	s.certMu.Lock()
+	defer s.certMu.Unlock()
+	if !s.certCachedAt.IsZero() && s.now().Sub(s.certCachedAt) < s.ttl {
+		return s.certCached, s.certErr
+	}
+	status, err := s.opts.CertStatus(s.opts.CA.CertPath())
+	s.certCached, s.certErr, s.certCachedAt = status, err, s.now()
+	return status, err
+}
+
+// invalidateCertStatus 丢弃缓存：安装/卸载后界面必须立刻反映新状态。
+func (s *Server) invalidateCertStatus() {
+	s.certMu.Lock()
+	s.certCachedAt = time.Time{}
+	s.certMu.Unlock()
 }
 
 func (s *Server) installCert(w http.ResponseWriter, r *http.Request) {
@@ -280,6 +322,7 @@ func (s *Server) installCert(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	s.invalidateCertStatus()
 	writeJSON(w, map[string]any{"ok": true})
 }
 
@@ -296,6 +339,7 @@ func (s *Server) uninstallCert(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	s.invalidateCertStatus()
 	writeJSON(w, map[string]any{"ok": true})
 }
 

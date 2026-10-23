@@ -52,6 +52,16 @@ func (l *Logger) Log(e Entry) {
 	}
 }
 
+// Write 实现 io.Writer，让标准库 log 的诊断信息与请求日志写进同一个文件。
+func (l *Logger) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.file == nil {
+		return len(p), nil
+	}
+	return l.file.Write(p)
+}
+
 func (l *Logger) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()

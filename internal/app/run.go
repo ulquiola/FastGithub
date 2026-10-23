@@ -65,6 +65,8 @@ func serve(ctx context.Context, cfg *config.Config, store *config.Store, proxyLn
 		return err
 	}
 	defer logger.Close()
+	// 托盘模式已 detachConsole，启动/降级诊断必须同时落盘，否则日志文件永远是空的。
+	defer attachDiagnostics(logger)()
 
 	res := resolver.New(cfg.DNS)
 	d := dialer.New(store, res, nil)

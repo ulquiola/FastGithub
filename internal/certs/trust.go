@@ -14,6 +14,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"fastgithub-go/internal/procattr"
 )
 
 type commandRunner func(name string, args ...string) error
@@ -253,7 +255,9 @@ func certThumbprint(certPath string) (string, error) {
 func runCommand(name string, args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, name, args...)
+	procattr.Hide(cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if msg := strings.TrimSpace(string(out)); msg != "" {
 			return fmt.Errorf("%w: %s", err, msg)
@@ -267,7 +271,9 @@ func runCommand(name string, args ...string) error {
 func runOutput(name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, name, args...)
+	procattr.Hide(cmd)
+	return cmd.CombinedOutput()
 }
 
 func copyFile(src, dst string) error {
