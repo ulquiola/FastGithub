@@ -1,6 +1,7 @@
 package certs
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
 	"errors"
@@ -266,7 +267,7 @@ func TestStatus(t *testing.T) {
 	}
 
 	// macOS：系统钥匙串存在。
-	st, err := status(ca.CertPath(), "darwin", found, nil)
+	st, err := status(ca.CertPath(), "darwin", found, nil, nil)
 	if err != nil || !st.Installed || st.Scope != "system" {
 		t.Fatalf("darwin system = %+v, %v", st, err)
 	}
@@ -278,29 +279,50 @@ func TestStatus(t *testing.T) {
 			return nil, errors.New("not found")
 		}
 		return []byte("SHA-1 hash: " + thumb + "\n"), nil
-	}, nil)
+	}, nil, nil)
 	if err != nil || !st.Installed || st.Scope != "user" {
 		t.Fatalf("darwin user = %+v, %v", st, err)
 	}
 	// macOS：都没安装。
-	st, err = status(ca.CertPath(), "darwin", missing, nil)
+	st, err = status(ca.CertPath(), "darwin", missing, nil, nil)
 	if err != nil || st.Installed || st.Scope != "none" {
 		t.Fatalf("darwin none = %+v, %v", st, err)
 	}
 
-	// Windows：certutil 成功即已安装。
-	st, err = status(ca.CertPath(), "windows", found, nil)
-	if err != nil || !st.Installed || st.Scope != "system" {
-		t.Fatalf("windows = %+v, %v", st, err)
+	// Windows：用 CryptoAPI 直查根存储（不再拉起 certutil 子进程），
+	// 先本机再当前用户；传给探测函数的必须是原始 SHA-1 指纹。
+	var gotHash []byte
+	lookupFor := func(want TrustStatus) storeLookup {
+		return func(hash []byte) (TrustStatus, error) {
+			gotHash = append([]byte(nil), hash...)
+			return want, nil
+		}
 	}
-	st, err = status(ca.CertPath(), "windows", missing, nil)
-	if err != nil || st.Installed {
+	st, err = status(ca.CertPath(), "windows", nil, nil, lookupFor(TrustStatus{Installed: true, Scope: "system"}))
+	if err != nil || !st.Installed || st.Scope != "system" {
+		t.Fatalf("windows system = %+v, %v", st, err)
+	}
+	if !bytes.Equal(gotHash, sum[:]) {
+		t.Fatalf("传给存储探测的指纹 = %x，期望 SHA-1 %x", gotHash, sum[:])
+	}
+	st, err = status(ca.CertPath(), "windows", nil, nil, lookupFor(TrustStatus{Installed: true, Scope: "user"}))
+	if err != nil || !st.Installed || st.Scope != "user" {
+		t.Fatalf("windows user = %+v, %v", st, err)
+	}
+	st, err = status(ca.CertPath(), "windows", nil, nil, lookupFor(TrustStatus{Scope: "none"}))
+	if err != nil || st.Installed || st.Scope != "none" {
 		t.Fatalf("windows none = %+v, %v", st, err)
+	}
+	boom := errors.New("crypt32 boom")
+	if _, err := status(ca.CertPath(), "windows", nil, nil, func([]byte) (TrustStatus, error) {
+		return TrustStatus{}, boom
+	}); !errors.Is(err, boom) {
+		t.Fatalf("windows 存储错误应向上传播，err = %v", err)
 	}
 
 	// Linux：文件内容一致才算安装。
 	same := func(path string) ([]byte, error) { return []byte("cert"), nil }
-	st, err = status("/tmp/ca.crt", "linux", nil, same)
+	st, err = status("/tmp/ca.crt", "linux", nil, same, nil)
 	if err != nil || !st.Installed || st.Scope != "system" {
 		t.Fatalf("linux = %+v, %v", st, err)
 	}
@@ -310,12 +332,12 @@ func TestStatus(t *testing.T) {
 		}
 		return []byte("cert"), nil
 	}
-	st, err = status("/tmp/ca.crt", "linux", nil, diff)
+	st, err = status("/tmp/ca.crt", "linux", nil, diff, nil)
 	if err != nil || st.Installed {
 		t.Fatalf("linux mismatch = %+v, %v", st, err)
 	}
 
-	if _, err := status("/tmp/ca.crt", "plan9", nil, nil); err == nil {
+	if _, err := status("/tmp/ca.crt", "plan9", nil, nil, nil); err == nil {
 		t.Fatal("不支持的平台应报错")
 	}
 }

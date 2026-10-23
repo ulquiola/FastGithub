@@ -21,6 +21,9 @@ type commandOutput func(name string, args ...string) ([]byte, error)
 type fileCopier func(src, dst string) error
 type fileRemover func(path string) error
 
+// storeLookup 按证书的原始 SHA-1 指纹查询根证书存储（Windows 走 CryptoAPI）。
+type storeLookup func(hash []byte) (TrustStatus, error)
+
 // Install 把 certPath 指向的 CA 证书加入系统信任库，需要管理员/root 权限。
 func Install(certPath string) error {
 	return install(certPath, runtime.GOOS, runCommand, copyFile)
@@ -76,10 +79,10 @@ type TrustStatus struct {
 
 // Status 检测 CA 是否已安装到系统或当前用户信任库。
 func Status(certPath string) (TrustStatus, error) {
-	return status(certPath, runtime.GOOS, runOutput, os.ReadFile)
+	return status(certPath, runtime.GOOS, runOutput, os.ReadFile, systemStoreStatus)
 }
 
-func status(certPath, goos string, runOut commandOutput, readFile func(string) ([]byte, error)) (TrustStatus, error) {
+func status(certPath, goos string, runOut commandOutput, readFile func(string) ([]byte, error), lookup storeLookup) (TrustStatus, error) {
 	switch goos {
 	case "darwin":
 		thumbprint, err := certThumbprint(certPath)
@@ -99,14 +102,12 @@ func status(certPath, goos string, runOut commandOutput, readFile func(string) (
 		}
 		return TrustStatus{Scope: "none"}, nil
 	case "windows":
-		thumbprint, err := certThumbprint(certPath)
+		// 直接查 Windows 根存储：不拉子进程，也不会因 certutil 输出编码而误判。
+		hash, err := certHash(certPath)
 		if err != nil {
 			return TrustStatus{}, err
 		}
-		if _, err := runOut("certutil", "-store", "Root", thumbprint); err == nil {
-			return TrustStatus{Installed: true, Scope: "system"}, nil
-		}
-		return TrustStatus{Scope: "none"}, nil
+		return lookup(hash)
 	case "linux":
 		const dest = "/usr/local/share/ca-certificates/fastgithub.crt"
 		installed, err := readFile(dest)
@@ -226,18 +227,27 @@ func isNotFound(err error) bool {
 		strings.Contains(msg, "unable to delete certificate matching")
 }
 
-// certThumbprint 返回 Windows certutil 使用的 SHA-1 指纹（大写十六进制）。
-func certThumbprint(certPath string) (string, error) {
+// certHash 返回证书的原始 SHA-1 指纹（CryptoAPI 与 certutil 都用它定位证书）。
+func certHash(certPath string) ([]byte, error) {
 	data, err := os.ReadFile(certPath)
 	if err != nil {
-		return "", fmt.Errorf("读取证书 %s 失败: %w", certPath, err)
+		return nil, fmt.Errorf("读取证书 %s 失败: %w", certPath, err)
 	}
 	cert, err := parseCertificate(data)
 	if err != nil {
-		return "", fmt.Errorf("解析证书 %s 失败: %w", certPath, err)
+		return nil, fmt.Errorf("解析证书 %s 失败: %w", certPath, err)
 	}
 	sum := sha1.Sum(cert.Raw)
-	return strings.ToUpper(hex.EncodeToString(sum[:])), nil
+	return sum[:], nil
+}
+
+// certThumbprint 返回 Windows certutil 使用的 SHA-1 指纹（大写十六进制）。
+func certThumbprint(certPath string) (string, error) {
+	sum, err := certHash(certPath)
+	if err != nil {
+		return "", err
+	}
+	return strings.ToUpper(hex.EncodeToString(sum)), nil
 }
 
 func runCommand(name string, args ...string) error {
